@@ -17,7 +17,7 @@ If no file found, exit with no action.
 ## Step 3: Extract project info
 
 Read the first few lines of the JSONL to find a line with a "cwd" field. That gives you project_path.
-project_name = last component of project_path (e.g. "workspace-dev" from "/Users/ncj/Documents/workspace/dev")
+project_name = last component of project_path (e.g. "dev" from "/Users/ncj/Documents/workspace/dev")
 
 ## Step 4: Parse the conversation
 
@@ -59,7 +59,7 @@ List of files mentioned as created/modified, commands run, GitHub issues/PRs ref
 - Other: description
 
 **excerpts.md:**
-The 2-3 most valuable Q&A exchanges from the conversation, verbatim. Choose exchanges that would be most useful to recall in a future session.
+The 2-3 most valuable Q&A exchanges from the conversation. Quote the user's message and the assistant's response text EXACTLY as they appear — copy the text directly, do not paraphrase or summarize. Choose exchanges that would be most useful to recall in a future session.
 
 ## Step 7: Update debounce timestamp
 
