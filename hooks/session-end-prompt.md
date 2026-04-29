@@ -24,7 +24,8 @@ If fewer than 3 user messages, exit with no action.
 
 ## Step 4: Write final session files
 
-Path: ~/agent-memory/projects/{project_name}/sessions/{YYYY-MM-DD}-{session_id[:6]}/
+Path: ~/agent-memory/projects/{project_name}/sessions/{YYYY-MM-DD from started_at}-{session_id[:6]}/
+Use the date component from `started_at` (the session start time extracted from the JSONL), not today's date. This ensures the directory matches any Stop snapshots created during the session.
 Create directory if not exists. Overwrite all existing files (idempotent over any Stop snapshots).
 
 **meta.yaml:** (complete final version)
@@ -37,7 +38,7 @@ agent: claude-code
 started_at: {ISO 8601 timestamp from first JSONL entry that has a timestamp field}
 ended_at: {current ISO 8601 timestamp}
 is_final: true
-snapshot_count: {count the number of meta.yaml files in this dir before this write; use 0 if dir is new}
+snapshot_count: {1 if a meta.yaml already exists in this directory (from a prior Stop snapshot), 0 if directory is new}
 tags: [{5-8 relevant tags as a YAML list}]
 ```
 
