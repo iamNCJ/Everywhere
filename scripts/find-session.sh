@@ -8,14 +8,20 @@ fi
 echo "$TRANSCRIPT"
 
 # Also extract project info
-CWD=$(python3 -c "
-import json
-with open('$TRANSCRIPT') as f:
+CWD=$(TRANSCRIPT_PATH="$TRANSCRIPT" python3 -c "
+import json, os
+with open(os.environ['TRANSCRIPT_PATH']) as f:
     for line in f:
-        d = json.loads(line.strip())
+        try:
+            d = json.loads(line.strip())
+        except (json.JSONDecodeError, ValueError):
+            continue
         if d.get('cwd'):
             print(d['cwd'])
             break
 " 2>/dev/null)
+if [ -z "$CWD" ]; then
+    echo "Warning: could not extract CWD from transcript" >&2
+fi
 echo "CWD: $CWD"
 echo "Project name: $(basename "$CWD")"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Extract user/assistant conversation from a CC session JSONL."""
-import json, sys, pathlib
+import json, sys
 
 def parse_transcript(jsonl_path):
     messages = []
@@ -41,7 +41,11 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: parse-transcript.py <path-to-session.jsonl>")
         sys.exit(1)
-    msgs = parse_transcript(sys.argv[1])
+    try:
+        msgs = parse_transcript(sys.argv[1])
+    except FileNotFoundError:
+        print(f"Error: file not found: {sys.argv[1]}", file=sys.stderr)
+        sys.exit(1)
     print(f"Found {len(msgs)} messages")
     for m in msgs[:3]:
         print(f"\n[{m['role'].upper()}] {m['text'][:200]}")
