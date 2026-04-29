@@ -1,5 +1,6 @@
 {
   "name": "everywhere",
+  "version": "1.0.0",
   "description": "Automatically persists every Claude Code session to a searchable global memory repository synced to GitHub",
   "author": {
     "name": "ncj",

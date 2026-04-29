@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Stop hook: debounced session snapshot via claude -p (Haiku)
+# Runs async — all failures are silent by design.
 
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$(dirname "$(realpath "$0")")")}"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 # Read hook input
 INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || true)
 [ -z "$SESSION_ID" ] && exit 0
 
-# Debounce check
+# Debounce: skip if snapshot taken within last 10 minutes
 SNAPSHOTS_DIR="$HOME/agent-memory/.snapshots"
 mkdir -p "$SNAPSHOTS_DIR"
 TIMESTAMP_FILE="$SNAPSHOTS_DIR/.last-$SESSION_ID"
 if [ -f "$TIMESTAMP_FILE" ]; then
-    LAST=$(cat "$TIMESTAMP_FILE")
+    LAST=$(cat "$TIMESTAMP_FILE" 2>/dev/null || echo "0")
     NOW=$(date +%s)
     [ $((NOW - LAST)) -lt 600 ] && exit 0
 fi
@@ -22,7 +23,7 @@ fi
 TRANSCRIPT=$(find ~/.claude/projects -name "${SESSION_ID}.jsonl" 2>/dev/null | head -1 || true)
 [ -z "$TRANSCRIPT" ] && exit 0
 
-# Extract project info
+# Extract project info using env var to avoid shell injection
 PROJECT_PATH=$(TRANSCRIPT_PATH="$TRANSCRIPT" python3 -c "
 import json, os
 with open(os.environ['TRANSCRIPT_PATH']) as f:
@@ -37,7 +38,7 @@ with open(os.environ['TRANSCRIPT_PATH']) as f:
 [ -z "$PROJECT_PATH" ] && exit 0
 PROJECT_NAME=$(basename "$PROJECT_PATH")
 
-# Extract started_at
+# Extract started_at from first timestamped entry; use sentinel if unavailable
 STARTED_AT=$(TRANSCRIPT_PATH="$TRANSCRIPT" python3 -c "
 import json, os
 from datetime import datetime, timezone
@@ -51,11 +52,12 @@ with open(os.environ['TRANSCRIPT_PATH']) as f:
                 print(datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
                 break
         except: continue
-" 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+" 2>/dev/null || true)
+[ -z "$STARTED_AT" ] && STARTED_AT="unknown"
 
-# Parse conversation text and count messages
+# Parse conversation: count user messages, collect text
 PARSED=$(TRANSCRIPT_PATH="$TRANSCRIPT" python3 -c "
-import json, os, sys
+import json, os
 msgs = []
 count = 0
 with open(os.environ['TRANSCRIPT_PATH']) as f:
@@ -85,8 +87,9 @@ print('\n\n'.join(msgs[:40]))
 " 2>/dev/null || echo "0")
 
 MSG_COUNT=$(echo "$PARSED" | head -1)
-[ "${MSG_COUNT:-0}" -lt 3 ] && exit 0
-
+if ! [[ "$MSG_COUNT" =~ ^[0-9]+$ ]] || [ "$MSG_COUNT" -lt 3 ]; then
+    exit 0
+fi
 TRANSCRIPT_TEXT=$(echo "$PARSED" | tail -n +3)
 
 # Generate session memory via claude -p (single call, returns JSON)
@@ -101,35 +104,60 @@ The session transcript is provided above. Return ONLY valid JSON with these keys
 - tags: array of 3-5 strings" \
     --model claude-haiku-4-5-20251001 2>/dev/null || echo '{}')
 
-# Parse JSON fields
-SUMMARY=$(echo "$MEMORY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('summary','Session snapshot.'))" 2>/dev/null || echo "Session snapshot.")
-DECISIONS=$(echo "$MEMORY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('decisions','No significant decisions yet.'))" 2>/dev/null || echo "No significant decisions yet.")
-ARTIFACTS=$(echo "$MEMORY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('artifacts','## Files\n\n## Commands\n\n## References'))" 2>/dev/null || echo "## Files\n\n## Commands\n\n## References")
-EXCERPTS=$(echo "$MEMORY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('excerpts','No excerpts captured.'))" 2>/dev/null || echo "No excerpts captured.")
-TAGS=$(echo "$MEMORY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tags',[]))" 2>/dev/null || echo "[]")
-
-# Create session directory
+# Parse JSON and write session files via Python (handles quoting safely)
 DATE_STR=$(echo "$STARTED_AT" | cut -c1-10)
 SESSION_SHORT=$(echo "$SESSION_ID" | cut -c1-6)
 SESSION_DIR="$HOME/agent-memory/projects/${PROJECT_NAME}/sessions/${DATE_STR}-${SESSION_SHORT}"
 mkdir -p "$SESSION_DIR"
 
-# Write files
-cat > "$SESSION_DIR/meta.yaml" << EOF
-session_id: $SESSION_ID
-session_id_short: $SESSION_SHORT
-project_path: $PROJECT_PATH
-project_name: $PROJECT_NAME
-agent: claude-code
-started_at: $STARTED_AT
-is_final: false
-tags: $TAGS
-EOF
+MEMORY_JSON="$MEMORY_JSON" \
+SESSION_ID="$SESSION_ID" \
+SESSION_SHORT="$SESSION_SHORT" \
+PROJECT_PATH="$PROJECT_PATH" \
+PROJECT_NAME="$PROJECT_NAME" \
+STARTED_AT="$STARTED_AT" \
+SESSION_DIR="$SESSION_DIR" \
+python3 << 'PYEOF'
+import json, os
 
-printf '%s\n' "$SUMMARY" > "$SESSION_DIR/summary.md"
-printf '%s\n' "$DECISIONS" > "$SESSION_DIR/decisions.md"
-printf '%s\n' "$ARTIFACTS" > "$SESSION_DIR/artifacts.md"
-printf '%s\n' "$EXCERPTS" > "$SESSION_DIR/excerpts.md"
+e = os.environ
+session_dir = e['SESSION_DIR']
+raw = e.get('MEMORY_JSON', '{}')
+
+try:
+    d = json.loads(raw)
+except Exception:
+    d = {}
+
+summary   = d.get('summary',   'Session snapshot.')
+decisions = d.get('decisions', 'No significant decisions yet.')
+artifacts = d.get('artifacts', '## Files\n\n## Commands\n\n## References')
+excerpts  = d.get('excerpts',  'No excerpts captured.')
+tags      = d.get('tags', [])
+tags_yaml = '[' + ', '.join(str(t) for t in tags) + ']'
+
+# meta.yaml: quote all string values to handle paths with spaces/colons
+meta = f'''session_id: "{e['SESSION_ID']}"
+session_id_short: "{e['SESSION_SHORT']}"
+project_path: "{e['PROJECT_PATH']}"
+project_name: "{e['PROJECT_NAME']}"
+agent: claude-code
+started_at: "{e['STARTED_AT']}"
+is_final: false
+tags: {tags_yaml}
+'''
+
+with open(os.path.join(session_dir, 'meta.yaml'), 'w') as f:
+    f.write(meta)
+with open(os.path.join(session_dir, 'summary.md'), 'w') as f:
+    f.write(summary + '\n')
+with open(os.path.join(session_dir, 'decisions.md'), 'w') as f:
+    f.write(decisions + '\n')
+with open(os.path.join(session_dir, 'artifacts.md'), 'w') as f:
+    f.write(artifacts + '\n')
+with open(os.path.join(session_dir, 'excerpts.md'), 'w') as f:
+    f.write(excerpts + '\n')
+PYEOF
 
 # Update debounce timestamp
 date +%s > "$TIMESTAMP_FILE"

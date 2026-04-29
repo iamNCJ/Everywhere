@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# SessionEnd hook: final session summary, git commit + push via claude -p (Haiku)
+# Runs async — all failures are silent by design.
 
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$(dirname "$(realpath "$0")")")}"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || true)
@@ -26,7 +27,7 @@ with open(os.environ['TRANSCRIPT_PATH']) as f:
 [ -z "$PROJECT_PATH" ] && exit 0
 PROJECT_NAME=$(basename "$PROJECT_PATH")
 
-# Extract started_at
+# Extract started_at; use sentinel if unavailable (avoids midnight-rollover mismatch with Stop hook)
 STARTED_AT=$(TRANSCRIPT_PATH="$TRANSCRIPT" python3 -c "
 import json, os
 from datetime import datetime, timezone
@@ -40,7 +41,8 @@ with open(os.environ['TRANSCRIPT_PATH']) as f:
                 print(datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
                 break
         except: continue
-" 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+" 2>/dev/null || true)
+[ -z "$STARTED_AT" ] && STARTED_AT="unknown"
 
 ENDED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -76,15 +78,20 @@ print('\n\n'.join(msgs[:60]))
 " 2>/dev/null || echo "0")
 
 MSG_COUNT=$(echo "$PARSED" | head -1)
-[ "${MSG_COUNT:-0}" -lt 3 ] && exit 0
+if ! [[ "$MSG_COUNT" =~ ^[0-9]+$ ]] || [ "$MSG_COUNT" -lt 3 ]; then
+    exit 0
+fi
 TRANSCRIPT_TEXT=$(echo "$PARSED" | tail -n +3)
 
-# Determine session dir and snapshot_count
+# Determine session dir and count prior Stop snapshots
 DATE_STR=$(echo "$STARTED_AT" | cut -c1-10)
 SESSION_SHORT=$(echo "$SESSION_ID" | cut -c1-6)
 SESSION_DIR="$HOME/agent-memory/projects/${PROJECT_NAME}/sessions/${DATE_STR}-${SESSION_SHORT}"
 SNAPSHOT_COUNT=0
-[ -f "$SESSION_DIR/meta.yaml" ] && SNAPSHOT_COUNT=1
+if [ -d "$SESSION_DIR" ]; then
+    # Count how many times the Stop hook wrote a snapshot (is_final: false meta.yamls)
+    SNAPSHOT_COUNT=$(grep -l "is_final: false" "$SESSION_DIR/meta.yaml" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+fi
 
 # Generate final memory via claude -p
 PROMPT_FILE="$PLUGIN_ROOT/hooks/session-end-prompt.md"
@@ -99,33 +106,69 @@ The complete session transcript is provided above. Return ONLY valid JSON with t
 - summary_first_sentence: string (just the first sentence of summary, for commit message)" \
     --model claude-haiku-4-5-20251001 2>/dev/null || echo '{}')
 
-SUMMARY=$(echo "$MEMORY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('summary','Session complete.'))" 2>/dev/null || echo "Session complete.")
-DECISIONS=$(echo "$MEMORY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('decisions','No significant decisions.'))" 2>/dev/null || echo "No significant decisions.")
-ARTIFACTS=$(echo "$MEMORY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('artifacts','## Files\n\n## Commands\n\n## References'))" 2>/dev/null || echo "## Files\n\n## Commands\n\n## References")
-EXCERPTS=$(echo "$MEMORY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('excerpts','No excerpts captured.'))" 2>/dev/null || echo "No excerpts captured.")
-TAGS=$(echo "$MEMORY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tags',[]))" 2>/dev/null || echo "[]")
-COMMIT_MSG=$(echo "$MEMORY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('summary_first_sentence','session complete'))" 2>/dev/null || echo "session complete")
-
-# Write session files
+# Write all session files via Python (handles quoting safely)
 mkdir -p "$SESSION_DIR"
 
-cat > "$SESSION_DIR/meta.yaml" << EOF
-session_id: $SESSION_ID
-session_id_short: $SESSION_SHORT
-project_path: $PROJECT_PATH
-project_name: $PROJECT_NAME
-agent: claude-code
-started_at: $STARTED_AT
-ended_at: $ENDED_AT
-is_final: true
-snapshot_count: $SNAPSHOT_COUNT
-tags: $TAGS
-EOF
+MEMORY_JSON="$MEMORY_JSON" \
+SESSION_ID="$SESSION_ID" \
+SESSION_SHORT="$SESSION_SHORT" \
+PROJECT_PATH="$PROJECT_PATH" \
+PROJECT_NAME="$PROJECT_NAME" \
+STARTED_AT="$STARTED_AT" \
+ENDED_AT="$ENDED_AT" \
+SNAPSHOT_COUNT="$SNAPSHOT_COUNT" \
+SESSION_DIR="$SESSION_DIR" \
+python3 << 'PYEOF'
+import json, os
 
-printf '%s\n' "$SUMMARY" > "$SESSION_DIR/summary.md"
-printf '%s\n' "$DECISIONS" > "$SESSION_DIR/decisions.md"
-printf '%s\n' "$ARTIFACTS" > "$SESSION_DIR/artifacts.md"
-printf '%s\n' "$EXCERPTS" > "$SESSION_DIR/excerpts.md"
+e = os.environ
+session_dir = e['SESSION_DIR']
+raw = e.get('MEMORY_JSON', '{}')
+
+try:
+    d = json.loads(raw)
+except Exception:
+    d = {}
+
+summary            = d.get('summary',            'Session complete.')
+decisions          = d.get('decisions',           'No significant decisions.')
+artifacts          = d.get('artifacts',           '## Files\n\n## Commands\n\n## References')
+excerpts           = d.get('excerpts',            'No excerpts captured.')
+tags               = d.get('tags', [])
+summary_first      = d.get('summary_first_sentence', summary.split('.')[0])
+tags_yaml          = '[' + ', '.join(str(t) for t in tags) + ']'
+
+meta = f'''session_id: "{e['SESSION_ID']}"
+session_id_short: "{e['SESSION_SHORT']}"
+project_path: "{e['PROJECT_PATH']}"
+project_name: "{e['PROJECT_NAME']}"
+agent: claude-code
+started_at: "{e['STARTED_AT']}"
+ended_at: "{e['ENDED_AT']}"
+is_final: true
+snapshot_count: {e['SNAPSHOT_COUNT']}
+tags: {tags_yaml}
+'''
+
+with open(os.path.join(session_dir, 'meta.yaml'), 'w') as f:
+    f.write(meta)
+with open(os.path.join(session_dir, 'summary.md'), 'w') as f:
+    f.write(summary + '\n')
+with open(os.path.join(session_dir, 'decisions.md'), 'w') as f:
+    f.write(decisions + '\n')
+with open(os.path.join(session_dir, 'artifacts.md'), 'w') as f:
+    f.write(artifacts + '\n')
+with open(os.path.join(session_dir, 'excerpts.md'), 'w') as f:
+    f.write(excerpts + '\n')
+
+# Write commit_msg to a temp file for the shell to read
+with open(os.path.join(session_dir, '.commit_msg'), 'w') as f:
+    f.write(summary_first)
+PYEOF
+
+# Read commit message written by Python (avoids shell variable escaping issues)
+COMMIT_MSG=$(cat "$SESSION_DIR/.commit_msg" 2>/dev/null || echo "session complete")
+rm -f "$SESSION_DIR/.commit_msg"
 
 # Update PROJECT.md
 PROJECT_MD="$HOME/agent-memory/projects/${PROJECT_NAME}/PROJECT.md"
@@ -147,7 +190,7 @@ if [ ! -f "$PROJECT_MD" ]; then
 EOF
 fi
 
-# Prepend session entry after "## Recent Sessions" line
+# Prepend session entry after the "## Recent Sessions" comment, keep last 10
 python3 - "$PROJECT_MD" "$SESSION_LINK" << 'PYEOF'
 import sys
 path, entry = sys.argv[1], sys.argv[2]
@@ -156,41 +199,51 @@ with open(path) as f:
 marker = "## Recent Sessions\n"
 if marker in content:
     parts = content.split(marker, 1)
-    # Find insertion point (after comment line if present)
     rest = parts[1]
     lines = rest.split('\n')
+    # Insert after the opening comment line
     insert_at = 0
     for i, line in enumerate(lines):
         if line.startswith('<!--'):
             insert_at = i + 1
             break
     lines.insert(insert_at, entry)
-    # Keep only 10 session entries
+    # Keep only 10 session entries (newest first)
     session_lines = [l for l in lines if l.startswith('- [')]
     if len(session_lines) > 10:
-        # Remove oldest (last) entries
         non_session = [l for l in lines if not l.startswith('- [')]
         session_lines = session_lines[:10]
-        lines = []
+        new_lines = []
         for l in non_session:
-            lines.append(l)
+            new_lines.append(l)
             if l.startswith('<!--'):
-                lines.extend(session_lines)
+                new_lines.extend(session_lines)
+        lines = new_lines
     new_content = parts[0] + marker + '\n'.join(lines)
     with open(path, 'w') as f:
         f.write(new_content)
 PYEOF
 
-# Update INDEX.md
+# Update INDEX.md (create if missing)
 INDEX_MD="$HOME/agent-memory/INDEX.md"
-if [ -f "$INDEX_MD" ] && ! grep -q "\[$PROJECT_NAME\]" "$INDEX_MD"; then
+if [ ! -f "$INDEX_MD" ]; then
+    cat > "$INDEX_MD" << 'EOF'
+# Everywhere — Global Memory Index
+
+> Auto-maintained by Everywhere. Last updated by SessionEnd hook.
+
+## Projects
+
+EOF
+fi
+if ! grep -q "\[$PROJECT_NAME\]" "$INDEX_MD"; then
     echo "- [$PROJECT_NAME](projects/$PROJECT_NAME/PROJECT.md) — $PROJECT_PATH" >> "$INDEX_MD"
 fi
 
-# Git commit + push
+# Git commit + push (fail silently if no remote configured)
 git -C "$HOME/agent-memory" add -A 2>/dev/null || true
 git -C "$HOME/agent-memory" commit -m "session: $PROJECT_NAME $SESSION_SHORT - $COMMIT_MSG" 2>/dev/null || true
-git -C "$HOME/agent-memory" push origin main 2>/dev/null || true  # fail silently if no remote
+git -C "$HOME/agent-memory" push origin main 2>/dev/null || true
 
 # Cleanup debounce file
 TIMESTAMP_FILE="$HOME/agent-memory/.snapshots/.last-$SESSION_ID"
