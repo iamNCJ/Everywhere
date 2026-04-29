@@ -39,17 +39,16 @@ with open(os.environ['TRANSCRIPT_PATH']) as f:
 PROJECT_NAME=$(basename "$PROJECT_PATH")
 
 # Extract started_at from first timestamped entry; use sentinel if unavailable
+# timestamp field is an ISO 8601 string (e.g. "2026-04-29T06:46:00.903Z")
 STARTED_AT=$(TRANSCRIPT_PATH="$TRANSCRIPT" python3 -c "
 import json, os
-from datetime import datetime, timezone
 with open(os.environ['TRANSCRIPT_PATH']) as f:
     for line in f:
         try:
             d = json.loads(line.strip())
             ts = d.get('timestamp')
-            if ts:
-                if ts > 1e10: ts = ts / 1000
-                print(datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
+            if ts and isinstance(ts, str):
+                print(ts[:19] + 'Z')
                 break
         except: continue
 " 2>/dev/null || true)
