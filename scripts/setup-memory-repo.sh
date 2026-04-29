@@ -16,6 +16,7 @@ git init
 git branch -m main
 
 mkdir -p .snapshots global projects
+touch projects/.gitkeep
 
 cat > .gitignore << 'EOF'
 .snapshots/
