@@ -1,0 +1,31 @@
+{
+  "description": "Everywhere plugin hooks - auto-save session memory on Stop and SessionEnd",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/stop-snapshot.sh\"",
+            "async": true,
+            "timeout": 120,
+            "statusMessage": "Everywhere: saving snapshot..."
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-end.sh\"",
+            "async": true,
+            "timeout": 180,
+            "statusMessage": "Everywhere: finalizing session memory..."
+          }
+        ]
+      }
+    ]
+  }
+}
