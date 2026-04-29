@@ -7,7 +7,7 @@ description: Use when the user invokes /everywhere-setup, /session-save, /recall
 
 > *Your agent sessions, accessible everywhere.*
 
-Everywhere persists Claude Code sessions to `~/agent-memory/` synced to GitHub. Hooks auto-save on Stop and SessionEnd; use these commands for manual control and retrieval.
+Everywhere persists Claude Code sessions to `~/agent-memory/` synced to GitHub. Run `/everywhere-setup` once to register hooks — after that, Stop and SessionEnd hooks auto-save every session. Use these commands for manual control and retrieval.
 
 ## Commands
 
@@ -93,17 +93,60 @@ git -C ~/agent-memory push -u origin main
 
 If `gh repo create` fails because the repo already exists, just get the URL and set the remote.
 
-#### 4. Verify hooks
+#### 4. Register hooks in ~/.claude/settings.json
 
-Tell the user: "Run `/hooks` in Claude Code and verify that both the **Stop** and **SessionEnd** hooks from the `everywhere` plugin appear in the list. If they don't, check that the plugin is installed in `~/.claude/plugins/`."
+Read the current `~/.claude/settings.json` (create it if missing). Add Stop and SessionEnd hooks using `type: "agent"` with the Haiku model. Merge carefully — preserve all existing settings.
+
+The hooks should read the prompt from the plugin's installed prompt files. Find the installed plugin directory first:
+
+```bash
+find ~/.claude/plugins -name "stop-snapshot-prompt.md" 2>/dev/null | head -1
+```
+
+If found, use `cat` on that path as the prompt source. Write the hooks to settings.json:
+
+```json
+{
+  "hooks": {
+    "Stop": [{
+      "hooks": [{
+        "type": "agent",
+        "model": "claude-haiku-4-5-20251001",
+        "async": true,
+        "timeout": 120,
+        "statusMessage": "Everywhere: saving snapshot...",
+        "prompt": "<contents of stop-snapshot-prompt.md>"
+      }]
+    }],
+    "SessionEnd": [{
+      "hooks": [{
+        "type": "agent",
+        "model": "claude-haiku-4-5-20251001",
+        "async": true,
+        "timeout": 180,
+        "statusMessage": "Everywhere: finalizing session memory...",
+        "prompt": "<contents of session-end-prompt.md>"
+      }]
+    }]
+  }
+}
+```
+
+Use the Read tool to load `~/.claude/settings.json`, merge the hooks section (preserve existing hooks), then write back with the Edit tool. Validate JSON after writing:
+
+```bash
+python3 -c "import json; json.load(open('$HOME/.claude/settings.json')); print('valid')"
+```
+
+Tell the user: "Hooks registered. They will take effect after restarting Claude Code (or run `/hooks` to reload)."
 
 #### 5. Print setup summary
 
 Report:
 - Memory repo location: `~/agent-memory/`
 - GitHub repo: output of `gh repo view everywhere-memory --json url -q .url`
-- Hook status: remind user to verify via `/hooks`
-- What happens next: hooks fire automatically; use `/session-save` to trigger manually.
+- Hooks: registered in `~/.claude/settings.json` (Stop + SessionEnd, Haiku model, async)
+- What happens next: hooks fire automatically on every session; use `/session-save` to trigger manually.
 
 ### `/session-save`
 
