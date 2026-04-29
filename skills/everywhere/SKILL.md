@@ -7,19 +7,15 @@ description: Use when the user invokes /everywhere-setup, /session-save, /recall
 
 > *Your agent sessions, accessible everywhere.*
 
-Everywhere auto-persists every Claude Code session to a hierarchical memory repo at `~/agent-memory/`, synced to a private GitHub repo. Two async hooks run on every Stop (debounced) and SessionEnd to summarize sessions via `claude -p` with Haiku.
+Everywhere persists Claude Code sessions to `~/agent-memory/` synced to GitHub. Hooks auto-save on Stop and SessionEnd; use these commands for manual control and retrieval.
 
 ## Commands
-
----
 
 ### `/everywhere-setup`
 
 First-time setup. Run this once to initialize the memory repo and connect it to GitHub.
 
 #### 1. Check prerequisites
-
-Run each check and report the result before proceeding:
 
 ```bash
 git --version
@@ -109,8 +105,6 @@ Report:
 - Hook status: remind user to verify via `/hooks`
 - What happens next: hooks fire automatically; use `/session-save` to trigger manually.
 
----
-
 ### `/session-save`
 
 Manually trigger a full session save right now, following the same logic as the `session-end.sh` hook.
@@ -121,7 +115,7 @@ Manually trigger a full session save right now, following the same logic as the 
 ls -t ~/.claude/projects/$(echo "$PWD" | sed 's|^/||; s|/|-|g')/*.jsonl 2>/dev/null | head -1
 ```
 
-If no file is found, tell the user no transcript was found for the current directory and exit.
+This returns the most recently modified session for the current directory. If multiple sessions exist, this picks the newest — which is usually correct. If no file is found, tell the user no transcript was found for the current directory and exit.
 
 #### 2. Extract project info from the transcript
 
@@ -147,7 +141,7 @@ Directory: `~/agent-memory/projects/{project_name}/sessions/{date_str}-{session_
 
 Create the directory. Write these files (overwrite if they exist):
 
-**`meta.yaml`:**
+**`meta.yaml`:** Quote all string values. Use `snapshot_count: 1` if a prior `meta.yaml` exists for this session, else `0`.
 ```yaml
 session_id: "{session_id}"
 session_id_short: "{session_id_short}"
@@ -157,8 +151,8 @@ agent: claude-code
 started_at: "{started_at}"
 ended_at: "{current ISO 8601 timestamp}"
 is_final: true
-snapshot_count: {1 if meta.yaml already existed, else 0}
-tags: [{5-8 relevant tags}]
+snapshot_count: {0 or 1}
+tags: [{5-8 relevant tags as YAML inline sequence}]
 ```
 
 **`summary.md`:** 3–5 sentences covering: what problem was solved, approach taken, outcome, anything left incomplete.
@@ -209,6 +203,16 @@ If there are more than 10 session entries, remove the oldest so only 10 remain.
 
 File: `~/agent-memory/INDEX.md`
 
+Create if it doesn't exist:
+```markdown
+# Everywhere — Global Memory Index
+
+> Auto-maintained by Everywhere. Last updated by SessionEnd hook.
+
+## Projects
+
+```
+
 If `{project_name}` is not already listed under `## Projects`, append:
 ```markdown
 - [{project_name}](projects/{project_name}/PROJECT.md) — {project_path}
@@ -228,8 +232,6 @@ If push fails (no remote or network error), commit locally and report the error 
 
 Tell the user: "Session saved. Files written to `~/agent-memory/projects/{project_name}/sessions/{date_str}-{session_id_short}/` and pushed to GitHub."
 
----
-
 ### `/recall [query]`
 
 Search the memory repo for sessions matching the query and return ranked results.
@@ -237,18 +239,18 @@ Search the memory repo for sessions matching the query and return ranked results
 #### 1. Search session content
 
 ```bash
-rg -l "{query}" ~/agent-memory/projects/ --include="*.md" 2>/dev/null | head -20
+rg -l "{query}" ~/agent-memory/projects/ --glob="*.md" 2>/dev/null | head -20
 ```
 
 #### 2. Search tags
 
 ```bash
-rg -l "{query}" ~/agent-memory/projects/ --include="meta.yaml" 2>/dev/null | head -10
+rg "{query}" ~/agent-memory/projects/ --glob="meta.yaml" 2>/dev/null | head -20
 ```
 
 #### 3. Deduplicate and rank results
 
-Combine both result sets. Deduplicate by session directory. Prefer matches that appear in `summary.md` or `meta.yaml` (tags). Rank by relevance: exact phrase matches > partial matches.
+Combine both result sets. Deduplicate by session directory. Prefer results where the match appeared in `summary.md` or `meta.yaml` tags over body matches in `decisions.md` or `artifacts.md`.
 
 #### 4. Read top results
 
@@ -265,8 +267,6 @@ Present results ranked by relevance. For each match include:
 - Path to `summary.md` for the user to explore further
 
 If no results are found, say so and suggest broader search terms.
-
----
 
 ### `/memory on`
 
@@ -292,16 +292,10 @@ Count the number of `- [` entries under `## Recent Sessions` in PROJECT.md (or 0
 
 Report: "Memory loaded. {N} sessions found for **{project_name}**. INDEX.md and PROJECT.md are now in context."
 
-Incorporate the content of both files into your working context for the rest of the session.
-
----
-
 ### `/memory off`
 
 Tell the user:
 
-> "Injected memory context cannot be removed from an active session. To start fresh without prior memory context, begin a new Claude Code session and do not run `/memory on`.
->
-> For the remainder of this session, I'll deprioritize the previously loaded memory context and treat it as background reference only."
+> "Injected memory context cannot be removed from an active session — once read, it remains in context. To start fresh without prior memory context, begin a new Claude Code session and do not run `/memory on`."
 
-Then stop referencing the previously loaded INDEX.md and PROJECT.md content unless explicitly asked.
+Do not proactively reference the previously loaded INDEX.md or PROJECT.md content for the remainder of the session unless the user explicitly asks about past sessions.
