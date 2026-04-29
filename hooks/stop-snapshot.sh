@@ -92,16 +92,25 @@ fi
 TRANSCRIPT_TEXT=$(echo "$PARSED" | tail -n +3)
 
 # Generate session memory via claude -p (single call, returns JSON)
+# claude -p may wrap output in ```json ... ``` — strip it before parsing
 PROMPT_FILE="$PLUGIN_ROOT/hooks/stop-snapshot-prompt.md"
-MEMORY_JSON=$(echo "$TRANSCRIPT_TEXT" | claude -p "$(cat "$PROMPT_FILE")
+MEMORY_JSON_RAW=$(echo "$TRANSCRIPT_TEXT" | claude -p "$(cat "$PROMPT_FILE")
 
-The session transcript is provided above. Return ONLY valid JSON with these keys:
+The session transcript is provided above. Return ONLY valid JSON (no markdown code blocks) with these keys:
 - summary: string (3-5 sentences)
 - decisions: string (markdown bullet list, or 'No significant decisions yet.')
 - artifacts: string (markdown with ## Files, ## Commands, ## References sections)
 - excerpts: string (2-3 most valuable Q&A verbatim quotes)
 - tags: array of 3-5 strings" \
     --model claude-haiku-4-5-20251001 2>/dev/null || echo '{}')
+# Strip markdown code fences if present
+MEMORY_JSON=$(echo "$MEMORY_JSON_RAW" | python3 -c "
+import sys, re
+raw = sys.stdin.read().strip()
+raw = re.sub(r'^[\x60]{3}(?:json)?\s*', '', raw)
+raw = re.sub(r'\s*[\x60]{3}$', '', raw)
+print(raw.strip())
+" 2>/dev/null || echo '{}')
 
 # Parse JSON and write session files via Python (handles quoting safely)
 DATE_STR=$(echo "$STARTED_AT" | cut -c1-10)

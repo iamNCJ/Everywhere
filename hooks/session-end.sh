@@ -93,10 +93,11 @@ if [ -d "$SESSION_DIR" ]; then
 fi
 
 # Generate final memory via claude -p
+# claude -p may wrap output in ```json ... ``` — strip it before parsing
 PROMPT_FILE="$PLUGIN_ROOT/hooks/session-end-prompt.md"
-MEMORY_JSON=$(echo "$TRANSCRIPT_TEXT" | claude -p "$(cat "$PROMPT_FILE")
+MEMORY_JSON_RAW=$(echo "$TRANSCRIPT_TEXT" | claude -p "$(cat "$PROMPT_FILE")
 
-The complete session transcript is provided above. Return ONLY valid JSON with these keys:
+The complete session transcript is provided above. Return ONLY valid JSON (no markdown code blocks) with these keys:
 - summary: string (thorough 3-5 sentences covering problem, approach, outcome, anything incomplete)
 - decisions: string (complete markdown with sub-headings if >5 decisions)
 - artifacts: string (markdown with ## Files, ## Commands, ## References sections)
@@ -104,6 +105,14 @@ The complete session transcript is provided above. Return ONLY valid JSON with t
 - tags: array of 5-8 strings
 - summary_first_sentence: string (just the first sentence of summary, for commit message)" \
     --model claude-haiku-4-5-20251001 2>/dev/null || echo '{}')
+# Strip markdown code fences if present
+MEMORY_JSON=$(echo "$MEMORY_JSON_RAW" | python3 -c "
+import sys, re
+raw = sys.stdin.read().strip()
+raw = re.sub(r'^[\x60]{3}(?:json)?\s*', '', raw)
+raw = re.sub(r'\s*[\x60]{3}$', '', raw)
+print(raw.strip())
+" 2>/dev/null || echo '{}')
 
 # Write all session files via Python (handles quoting safely)
 mkdir -p "$SESSION_DIR"
