@@ -10,7 +10,19 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+
+from hooks.snapshot import (
+    parse_codex_transcript,
+    format_conversation,
+    write_session_files,
+    update_project_md,
+    update_index_md,
+    git_commit_push,
+    first_sentence,
+)
+from hooks.summarizer import summarize, DEFAULT_CODEX_MODEL
 
 
 DEBOUNCE_SECONDS = 600
@@ -137,25 +149,113 @@ def run_sweep(memory_repo: Path) -> int:
 
 
 def _handle_rollout(rollout: Path, cursor: dict, now: float, memory_repo: Path) -> bool:
-    """Process one rollout file. Returns True if any state changed."""
-    # Stub for Task 7 — real work added in Task 8.
     mtime = rollout.stat().st_mtime
-    # We need the session_id to key the cursor. Read just the first line.
-    try:
-        with open(rollout) as f:
-            first = f.readline()
-        meta = json.loads(first)
-        if meta.get("type") != "session_meta":
-            return False
-        session_id = meta.get("payload", {}).get("id")
-        if not session_id:
-            return False
-    except (json.JSONDecodeError, OSError):
+    session_id, cwd, started_at, messages = parse_codex_transcript(rollout)
+    if session_id is None:
         return False
 
     action = decide_action(mtime, now, cursor.get(session_id))
     _log(f"{session_id[:8]} mtime_age={int(now-mtime)}s action={action}")
     if action == "skip":
         return False
-    # Real per-action logic in Task 8.
-    return False
+
+    user_count = sum(1 for m in messages if m["role"] == "user")
+    if user_count < MIN_USER_MESSAGES:
+        _log(f"{session_id[:8]} only {user_count} user messages; skip")
+        return False
+
+    is_final = action == "finalize"
+
+    # Summarize.
+    try:
+        conversation = format_conversation(messages)
+        model = os.environ.get("EVERYWHERE_CODEX_MODEL", DEFAULT_CODEX_MODEL)
+        summary_obj = summarize(conversation, agent="codex", model=model)
+    except Exception as e:
+        prior = cursor.get(session_id, {})
+        retries = int(prior.get("retry_count", 0)) + 1
+        _err(f"{session_id[:8]} summarization failed (retry {retries}): {e}")
+        if retries >= MAX_RETRY_COUNT and is_final:
+            _log(f"{session_id[:8]} max retries reached; finalizing with stub summary")
+            summary_obj = _stub_summary(session_id, len(messages), user_count)
+        else:
+            cursor[session_id] = {
+                "last_mtime": mtime,
+                "last_snapshot_at": prior.get("last_snapshot_at", 0),
+                "is_final": False,
+                "retry_count": retries,
+            }
+            return True
+
+    required = {"summary", "decisions", "artifacts", "excerpts", "tags"}
+    missing = required - set(summary_obj.keys())
+    if missing:
+        _err(f"{session_id[:8]} summary missing keys: {missing}")
+        return False
+
+    project_name = os.path.basename(cwd) or "unknown"
+    date_str = (started_at or datetime.now(timezone.utc).isoformat())[:10]
+    session_short = session_id[:6]
+    session_dir = (
+        memory_repo / "projects" / project_name / "sessions" / f"{date_str}-{session_short}"
+    )
+
+    snapshot_count = 0
+    if is_final:
+        try:
+            for line in (session_dir / "meta.yaml").read_text().splitlines():
+                if line.startswith("is_final:") and line.split(":", 1)[1].strip() == "false":
+                    snapshot_count = 1
+                    break
+        except FileNotFoundError:
+            pass
+
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    meta = {
+        "session_id": session_id,
+        "session_id_short": session_short,
+        "project_path": cwd,
+        "project_name": project_name,
+        "agent": "codex",
+        "started_at": started_at or now_iso,
+        "is_final": is_final,
+        "snapshot_count": snapshot_count,
+        "tags": summary_obj.get("tags", []),
+    }
+    if is_final:
+        meta["ended_at"] = now_iso
+
+    write_session_files(session_dir, meta, summary_obj)
+    update_project_md(
+        memory_repo / "projects" / project_name,
+        project_name, cwd, date_str, session_short, summary_obj["summary"],
+    )
+    update_index_md(project_name, cwd)
+    _log(f"{session_id[:8]} wrote {session_dir}")
+
+    cursor[session_id] = {
+        "last_mtime": mtime,
+        "last_snapshot_at": now,
+        "is_final": is_final,
+        "retry_count": 0,
+    }
+
+    if is_final:
+        headline = first_sentence(summary_obj["summary"])
+        git_commit_push(project_name, session_short, headline)
+
+    return True
+
+
+def _stub_summary(session_id: str, total_msgs: int, user_msgs: int) -> dict:
+    return {
+        "summary": (
+            f"Codex session {session_id[:8]} captured with summarizer failures. "
+            f"{user_msgs} user messages, {total_msgs} total. "
+            f"Stub finalization after {MAX_RETRY_COUNT} retry attempts."
+        ),
+        "decisions": "- Stub summary: summarizer repeatedly failed; full content not extracted.",
+        "artifacts": "## Files\n\n- (stub — not extracted)",
+        "excerpts": "## Exchange 1: stub\n\n**User:** (stub)\n\n**Assistant:** (stub)",
+        "tags": ["stub", "summarizer-failed", "codex"],
+    }
