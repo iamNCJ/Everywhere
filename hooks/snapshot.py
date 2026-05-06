@@ -77,6 +77,51 @@ def parse_transcript(path: Path):
     return started_at, messages
 
 
+def parse_codex_transcript(path: Path):
+    """Parse a Codex CLI rollout JSONL.
+
+    Returns (session_id, cwd, started_at, messages) or (None, None, None, [])
+    if the file lacks a session_meta header.
+    """
+    session_id = cwd = started_at = None
+    messages = []
+    with open(path) as f:
+        for i, line in enumerate(f):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            t = entry.get("type")
+            payload = entry.get("payload") or {}
+            if i == 0 and t == "session_meta":
+                session_id = payload.get("id")
+                cwd = payload.get("cwd")
+                started_at = payload.get("timestamp")
+                continue
+            if t != "response_item":
+                continue
+            if payload.get("type") != "message":
+                continue
+            role = payload.get("role")
+            if role not in ("user", "assistant"):
+                continue
+            text = " ".join(
+                c.get("text", "")
+                for c in (payload.get("content") or [])
+                if isinstance(c, dict)
+                and c.get("type") in ("input_text", "output_text")
+            ).strip()
+            if not text:
+                continue
+            messages.append({"role": role, "text": text})
+    if session_id is None:
+        return None, None, None, []
+    return session_id, cwd, started_at, messages
+
+
 def _extract_text(content) -> str:
     if isinstance(content, str):
         return content.strip()
