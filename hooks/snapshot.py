@@ -353,7 +353,13 @@ def main():
     parser.add_argument("--dry-run", action="store_true",
                         help="Skip claude -p; use a stub summary (for testing)")
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--codex-sweep", action="store_true",
+                        help="Run the Codex session sweeper instead of reading a hook payload")
     args = parser.parse_args()
+
+    if args.codex_sweep:
+        from hooks.codex_sweep import run_sweep
+        sys.exit(run_sweep(MEMORY_REPO))
 
     raw = sys.stdin.read()
     if not raw.strip():
