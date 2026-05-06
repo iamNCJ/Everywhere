@@ -169,6 +169,84 @@ Report:
 - Hooks: registered in `~/.claude/settings.json` (Stop + SessionEnd, Haiku model, async)
 - What happens next: hooks fire automatically on every session; use `/session-save` to trigger manually.
 
+### `/everywhere-codex-setup`
+
+One-time setup for capturing Codex CLI sessions into the same memory repo. macOS only.
+
+#### 1. Check prerequisites
+
+```bash
+codex --version
+test -d ~/agent-memory/.git && echo "ok" || echo "missing"
+```
+
+If `codex` is missing: tell the user to install Codex CLI first (`brew install codex`) and re-invoke.
+If the memory repo is missing: tell the user to run `/everywhere-setup` first and exit.
+
+#### 2. Locate the plugin directory
+
+```bash
+find ~/.claude/plugins/cache -path "*everywhere*/hooks/snapshot.py" 2>/dev/null | head -1
+```
+
+If the search returns a path: that's `<ABS_PLUGIN_ROOT>` (the directory two levels above the matched file — i.e. drop the trailing `/hooks/snapshot.py`).
+Else: ask the user where they cloned the plugin and use that path.
+
+#### 3. Render the plist from the template
+
+Read `<ABS_PLUGIN_ROOT>/hooks/codex-sweeper.plist.template`. Replace `__ABS_PLUGIN_ROOT__` with the absolute plugin path and `__HOME__` with `$HOME`. Write the result to `~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist`.
+
+```bash
+PLUGIN=<ABS_PLUGIN_ROOT>
+sed -e "s|__ABS_PLUGIN_ROOT__|$PLUGIN|g" -e "s|__HOME__|$HOME|g" \
+    "$PLUGIN/hooks/codex-sweeper.plist.template" \
+    > ~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist
+plutil ~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist
+```
+
+The `plutil` line validates the XML. If it fails, abort and report the error.
+
+#### 4. Bootstrap the launchd job
+
+```bash
+LABEL=dev.everywhere.codex-sweeper
+launchctl bootout gui/$UID/$LABEL 2>/dev/null || true
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/$LABEL.plist
+launchctl print gui/$UID/$LABEL | head -20
+```
+
+The `bootout` line is best-effort cleanup of any stale registration. `bootstrap` loads the plist. `print` should show the job is loaded.
+
+#### 5. Kick once to verify
+
+```bash
+launchctl kickstart gui/$UID/dev.everywhere.codex-sweeper
+sleep 3
+tail -20 ~/agent-memory/.snapshots/codex-sweep.log 2>/dev/null
+tail -20 ~/agent-memory/.snapshots/codex-sweep.err 2>/dev/null
+```
+
+If `codex-sweep.err` shows `command not found: codex` or `command not found: claude`: the launchd `PATH` doesn't include the homebrew prefix. Check the plist's `<key>EnvironmentVariables</key>` block.
+
+#### 6. Optionally install the Codex-side skill
+
+```bash
+mkdir -p ~/.codex/skills/everywhere
+cp $PLUGIN/skills/everywhere/SKILL.md ~/.codex/skills/everywhere/SKILL.md
+```
+
+This lets `/recall`, `/memory on`, etc. work from inside Codex too. Skip if the user prefers Claude-only invocation.
+
+#### 7. Report to the user
+
+Tell the user:
+- Plist path: `~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist`
+- Sweep log: `~/agent-memory/.snapshots/codex-sweep.log`
+- Sweep interval: 5 min
+- Finality threshold: 10 min idle
+- Codex skill: installed at `~/.codex/skills/everywhere/SKILL.md` (if step 6 ran)
+- Codex `notify` setting was **not** modified.
+
 ### `/session-save`
 
 Manually trigger a full session save right now, following the same logic as the `session-end.sh` hook.
