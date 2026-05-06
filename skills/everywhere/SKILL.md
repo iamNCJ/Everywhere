@@ -247,6 +247,24 @@ Tell the user:
 - Codex skill: installed at `~/.codex/skills/everywhere/SKILL.md` (if step 6 ran)
 - Codex `notify` setting was **not** modified.
 
+### `/everywhere-codex-uninstall`
+
+Stop the Codex sweeper and remove the launchd plist.
+
+```bash
+LABEL=dev.everywhere.codex-sweeper
+launchctl bootout gui/$UID/$LABEL 2>/dev/null
+rm -f ~/Library/LaunchAgents/$LABEL.plist
+```
+
+Then optionally remove the Codex-side skill:
+
+```bash
+rm -rf ~/.codex/skills/everywhere
+```
+
+The memory repo and existing session files are kept untouched. Tell the user that re-running `/everywhere-codex-setup` will resume sweeping with the existing cursor (no re-summarization of past sessions).
+
 ### `/session-save`
 
 Manually trigger a full session save right now, following the same logic as the `session-end.sh` hook.
