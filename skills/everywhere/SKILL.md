@@ -1,13 +1,13 @@
 ---
 name: everywhere
-description: Use when the user invokes /everywhere-setup, /session-save, /recall, /memory on, or /memory off. Also use when the user asks to search past sessions, access historical context, or save the current session to memory.
+description: Use when the user invokes /everywhere-setup, /everywhere-codex-setup, /everywhere-codex-uninstall, /session-save, /recall, /memory on, or /memory off. Also use when the user asks to search past sessions, access historical context across Claude Code or Codex CLI, save the current session to memory, or set up automatic Codex session capture.
 ---
 
 # Everywhere
 
 > *Your agent sessions, accessible everywhere.*
 
-Everywhere persists Claude Code sessions to `~/agent-memory/` synced to GitHub. Run `/everywhere-setup` once to register hooks — after that, Stop and SessionEnd hooks auto-save every session. Use these commands for manual control and retrieval.
+Everywhere persists Claude Code and Codex CLI sessions to `~/agent-memory/` synced to GitHub. For Claude, run `/everywhere-setup` to register Stop/SessionEnd hooks. For Codex, run `/everywhere-codex-setup` to install a launchd sweeper that polls `~/.codex/sessions/` every 5 minutes. Both feed the same memory repo; `meta.yaml.agent` distinguishes the source. Use the commands below for manual control and retrieval.
 
 ## Commands
 
