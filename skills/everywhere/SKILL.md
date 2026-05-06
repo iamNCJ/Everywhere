@@ -192,13 +192,26 @@ find ~/.claude/plugins/cache -path "*everywhere*/hooks/snapshot.py" 2>/dev/null 
 If the search returns a path: that's `<ABS_PLUGIN_ROOT>` (the directory two levels above the matched file — i.e. drop the trailing `/hooks/snapshot.py`).
 Else: ask the user where they cloned the plugin and use that path.
 
-#### 3. Render the plist from the template
+#### 3. Stage hooks to a TCC-safe location
 
-Read `<ABS_PLUGIN_ROOT>/hooks/codex-sweeper.plist.template`. Replace `__ABS_PLUGIN_ROOT__` with the absolute plugin path and `__HOME__` with `$HOME`. Write the result to `~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist`.
+macOS Transparency, Consent, and Control (TCC) blocks `launchd`-spawned processes from reading paths inside `~/Documents/`, `~/Desktop/`, and `~/Downloads/` without explicit Full Disk Access. To avoid forcing the user through Privacy & Security settings, copy the Python scripts to `~/.everywhere/hooks/` (which is TCC-safe) and point the plist there.
 
 ```bash
 PLUGIN=<ABS_PLUGIN_ROOT>
-sed -e "s|__ABS_PLUGIN_ROOT__|$PLUGIN|g" -e "s|__HOME__|$HOME|g" \
+mkdir -p ~/.everywhere/hooks
+cp "$PLUGIN/hooks/snapshot.py" "$PLUGIN/hooks/codex_sweep.py" \
+   "$PLUGIN/hooks/summarizer.py" "$PLUGIN/hooks/__init__.py" \
+   ~/.everywhere/hooks/
+```
+
+Re-running `/everywhere-codex-setup` after a plugin update refreshes these copies.
+
+#### 4. Render the plist from the template
+
+Read `<ABS_PLUGIN_ROOT>/hooks/codex-sweeper.plist.template`. Replace `__ABS_PLUGIN_ROOT__` with `$HOME/.everywhere` (the staging path from step 3) and `__HOME__` with `$HOME`. Write the result to `~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist`.
+
+```bash
+sed -e "s|__ABS_PLUGIN_ROOT__|$HOME/.everywhere|g" -e "s|__HOME__|$HOME|g" \
     "$PLUGIN/hooks/codex-sweeper.plist.template" \
     > ~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist
 plutil ~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist
@@ -206,7 +219,7 @@ plutil ~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist
 
 The `plutil` line validates the XML. If it fails, abort and report the error.
 
-#### 4. Bootstrap the launchd job
+#### 5. Bootstrap the launchd job
 
 ```bash
 LABEL=dev.everywhere.codex-sweeper
@@ -217,18 +230,20 @@ launchctl print gui/$UID/$LABEL | head -20
 
 The `bootout` line is best-effort cleanup of any stale registration. `bootstrap` loads the plist. `print` should show the job is loaded.
 
-#### 5. Kick once to verify
+#### 6. Kick once to verify
 
 ```bash
 launchctl kickstart gui/$UID/dev.everywhere.codex-sweeper
-sleep 3
+sleep 4
 tail -20 ~/agent-memory/.snapshots/codex-sweep.log 2>/dev/null
 tail -20 ~/agent-memory/.snapshots/codex-sweep.err 2>/dev/null
 ```
 
 If `codex-sweep.err` shows `command not found: codex` or `command not found: claude`: the launchd `PATH` doesn't include the homebrew prefix. Check the plist's `<key>EnvironmentVariables</key>` block.
 
-#### 6. Optionally install the Codex-side skill
+If `codex-sweep.err` shows `Operation not permitted` reading the script path: step 3 was skipped — the launchd job is pointing at a TCC-protected location instead of `~/.everywhere/hooks/`. Re-run step 3 and step 4.
+
+#### 7. Optionally install the Codex-side skill
 
 ```bash
 mkdir -p ~/.codex/skills/everywhere
@@ -237,24 +252,26 @@ cp $PLUGIN/skills/everywhere/SKILL.md ~/.codex/skills/everywhere/SKILL.md
 
 This lets `/recall`, `/memory on`, etc. work from inside Codex too. Skip if the user prefers Claude-only invocation.
 
-#### 7. Report to the user
+#### 8. Report to the user
 
 Tell the user:
+- Staged hooks: `~/.everywhere/hooks/` (re-run setup after plugin updates)
 - Plist path: `~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist`
 - Sweep log: `~/agent-memory/.snapshots/codex-sweep.log`
 - Sweep interval: 5 min
 - Finality threshold: 10 min idle
-- Codex skill: installed at `~/.codex/skills/everywhere/SKILL.md` (if step 6 ran)
+- Codex skill: installed at `~/.codex/skills/everywhere/SKILL.md` (if step 7 ran)
 - Codex `notify` setting was **not** modified.
 
 ### `/everywhere-codex-uninstall`
 
-Stop the Codex sweeper and remove the launchd plist.
+Stop the Codex sweeper, remove the launchd plist, and clean up the staged hooks.
 
 ```bash
 LABEL=dev.everywhere.codex-sweeper
 launchctl bootout gui/$UID/$LABEL 2>/dev/null
 rm -f ~/Library/LaunchAgents/$LABEL.plist
+rm -rf ~/.everywhere
 ```
 
 Then optionally remove the Codex-side skill:
