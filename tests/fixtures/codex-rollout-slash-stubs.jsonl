@@ -1,0 +1,5 @@
+{"timestamp":"2026-05-06T10:00:00.000Z","type":"session_meta","payload":{"id":"019de222-aaaa-bbbb-cccc-dddddddddddd","timestamp":"2026-05-06T10:00:00.000Z","cwd":"/Users/test/proj","originator":"Codex CLI","cli_version":"0.128.0"}}
+{"timestamp":"2026-05-06T10:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<command-name>/resume</command-name>\n            <command-message>resume</command-message>\n            <command-args></command-args>"}]}}
+{"timestamp":"2026-05-06T10:00:02.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<local-command-stdout>No conversations found to resume</local-command-stdout>"}]}}
+{"timestamp":"2026-05-06T10:00:03.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"real user prompt"}]}}
+{"timestamp":"2026-05-06T10:00:04.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"real reply"}]}}

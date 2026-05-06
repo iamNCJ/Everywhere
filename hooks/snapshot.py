@@ -116,6 +116,8 @@ def parse_codex_transcript(path: Path):
             ).strip()
             if not text:
                 continue
+            if role == "user" and _is_slash_stub(text):
+                continue
             messages.append({"role": role, "text": text})
     if session_id is None:
         return None, None, None, []
@@ -133,6 +135,13 @@ def _extract_text(content) -> str:
         ]
         return " ".join(parts).strip()
     return ""
+
+
+_SLASH_STUB_RE = re.compile(r"^\s*<(?:command-name|local-command-stdout)\b")
+
+
+def _is_slash_stub(text: str) -> bool:
+    return bool(_SLASH_STUB_RE.match(text))
 
 
 def format_conversation(messages) -> str:

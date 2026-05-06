@@ -24,3 +24,23 @@ def test_skips_event_msg_and_turn_context():
     )
     roles = [m["role"] for m in messages]
     assert roles == ["user", "assistant", "user", "assistant", "user"]
+
+
+def test_filters_slash_command_stubs():
+    _, _, _, messages = parse_codex_transcript(
+        FIXTURES / "codex-rollout-slash-stubs.jsonl"
+    )
+    assert messages == [
+        {"role": "user", "text": "real user prompt"},
+        {"role": "assistant", "text": "real reply"},
+    ]
+
+
+def test_returns_empty_when_session_meta_missing():
+    session_id, cwd, started_at, messages = parse_codex_transcript(
+        FIXTURES / "codex-rollout-no-meta.jsonl"
+    )
+    assert session_id is None
+    assert cwd is None
+    assert started_at is None
+    assert messages == []
