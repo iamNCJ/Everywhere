@@ -2,11 +2,20 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+DEBUG = os.environ.get("EVERYWHERE_DEBUG", "0") == "1"
+
+
+def log(msg: str) -> None:
+    if DEBUG:
+        print(f"[everywhere] {msg}", file=sys.stderr, flush=True)
+
 
 CLAUDE_TIMEOUT = 150
 CODEX_TIMEOUT = 180
@@ -53,6 +62,7 @@ def _summarize_with_claude(conversation: str, model: str) -> dict:
         "claude", "-p", _build_prompt(conversation),
         "--model", model, "--output-format", "json",
     ]
+    log(f"calling claude -p (model={model}, prompt_len={len(cmd[2])})")
     try:
         result = subprocess.run(
             cmd, text=True, capture_output=True, timeout=CLAUDE_TIMEOUT,
@@ -90,6 +100,7 @@ def _summarize_with_codex(conversation: str, model: str) -> dict:
             "--output-last-message", str(last_msg_path),
             _build_prompt(conversation),
         ]
+        log(f"calling codex exec (model={model}, prompt_len={len(cmd[-1])})")
         try:
             result = subprocess.run(
                 cmd, text=True, capture_output=True, timeout=CODEX_TIMEOUT,
