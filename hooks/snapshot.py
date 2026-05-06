@@ -27,6 +27,9 @@ MIN_USER_MESSAGES = 3
 DEFAULT_MODEL = "claude-haiku-4-5"
 CLAUDE_TIMEOUT = 150
 PROJECT_ENTRY_CAP = 10
+MAX_CONVERSATION_CHARS = 60000
+
+HOOK_SESSION_END = "SessionEnd"
 
 DEBUG = os.environ.get("EVERYWHERE_DEBUG", "0") == "1"
 
@@ -88,11 +91,20 @@ def _extract_text(content) -> str:
 
 
 def format_conversation(messages) -> str:
-    parts = []
-    for m in messages:
+    # Cap from the tail — recent context is what matters for the headline.
+    kept, total, truncated = [], 0, False
+    for m in reversed(messages):
         prefix = "USER" if m["role"] == "user" else "ASSISTANT"
-        parts.append(f"--- {prefix} ---\n{m['text']}")
-    return "\n\n".join(parts)
+        chunk = f"--- {prefix} ---\n{m['text']}"
+        if total + len(chunk) > MAX_CONVERSATION_CHARS:
+            truncated = True
+            break
+        kept.append(chunk)
+        total += len(chunk)
+    kept.reverse()
+    if truncated:
+        kept.insert(0, "[...earlier conversation truncated for length...]")
+    return "\n\n".join(kept)
 
 
 # ---------- claude -p ----------
@@ -254,7 +266,6 @@ def update_project_md(
             if line.startswith("<!--"):
                 out.append(line)
                 continue
-            # blank lines / other content inside section: skip silently
             continue
         out.append(line)
     if in_recent and not flushed:
@@ -310,6 +321,24 @@ def git_commit_push(project_name: str, session_short: str, summary_first: str) -
     except subprocess.CalledProcessError as e:
         err(f"git commit failed: {(e.stderr or b'').decode()[:300]}")
         return
+    has_remote = subprocess.run(
+        ["git", "-C", str(MEMORY_REPO), "remote"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    if not has_remote:
+        log("no git remote configured; skipping push")
+        return
+    try:
+        subprocess.run(
+            ["git", "-C", str(MEMORY_REPO),
+             "pull", "--rebase", "--autostash", "origin", "main"],
+            check=True, capture_output=True, timeout=30,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        stderr = (getattr(e, "stderr", b"") or b"").decode()[:300]
+        err(f"pull --rebase failed (commit kept locally, will retry next session): "
+            f"{stderr or e}")
+        return
     try:
         subprocess.run(
             ["git", "-C", str(MEMORY_REPO), "push", "origin", "main"],
@@ -350,19 +379,18 @@ def main():
             f"transcript_path={bool(transcript_path)} cwd={bool(cwd)}")
         return
 
-    is_final = event == "SessionEnd"
+    is_final = event == HOOK_SESSION_END
     log(f"event={event} session={session_id[:8]} cwd={cwd}")
 
     SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
     debounce_file = SNAPSHOTS_DIR / f".last-{session_id}"
-    if not is_final and debounce_file.exists():
+    if not is_final:
         try:
-            last = int(debounce_file.read_text().strip())
-            age = int(time.time() - last)
+            age = time.time() - debounce_file.stat().st_mtime
             if age < DEBOUNCE_SECONDS:
-                log(f"debounced ({age}s < {DEBOUNCE_SECONDS}s)")
+                log(f"debounced ({int(age)}s < {DEBOUNCE_SECONDS}s)")
                 return
-        except (ValueError, OSError):
+        except FileNotFoundError:
             pass
 
     if not (MEMORY_REPO / ".git").exists():
@@ -370,11 +398,11 @@ def main():
         return
 
     transcript = Path(transcript_path)
-    if not transcript.exists():
+    try:
+        started_at, messages = parse_transcript(transcript)
+    except FileNotFoundError:
         err(f"transcript not found: {transcript}")
         return
-
-    started_at, messages = parse_transcript(transcript)
     user_count = sum(1 for m in messages if m["role"] == "user")
     if user_count < MIN_USER_MESSAGES:
         log(f"only {user_count} user messages; skip (need >= {MIN_USER_MESSAGES})")
@@ -422,13 +450,13 @@ def main():
 
     snapshot_count = 0
     if is_final:
-        existing = session_dir / "meta.yaml"
-        if existing.exists():
-            try:
-                if "is_final: false" in existing.read_text():
+        try:
+            for line in (session_dir / "meta.yaml").read_text().splitlines():
+                if line.startswith("is_final:") and line.split(":", 1)[1].strip() == "false":
                     snapshot_count = 1
-            except OSError:
-                pass
+                    break
+        except FileNotFoundError:
+            pass
 
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     meta = {
@@ -439,7 +467,7 @@ def main():
         "agent": "claude-code",
         "started_at": started_at or now_iso,
         "is_final": is_final,
-        "snapshot_count": snapshot_count if is_final else 0,
+        "snapshot_count": snapshot_count,
         "tags": summary_obj.get("tags", []),
     }
     if is_final:
@@ -456,21 +484,17 @@ def main():
     if is_final:
         headline = first_sentence(summary_obj["summary"])
         git_commit_push(project_name, session_short, headline)
-        if debounce_file.exists():
-            try:
-                debounce_file.unlink()
-            except OSError:
-                pass
+        debounce_file.unlink(missing_ok=True)
     else:
         try:
-            debounce_file.write_text(str(int(time.time())))
+            debounce_file.touch()
         except OSError as e:
-            err(f"debounce write failed: {e}")
+            err(f"debounce touch failed: {e}")
 
 
 if __name__ == "__main__":
     try:
         main()
-    except Exception as e:  # absolutely no propagation
+    except Exception as e:
         err(f"unhandled: {e}")
         sys.exit(0)

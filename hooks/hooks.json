@@ -1,6 +1,5 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "_comment": "Stop snapshots periodically (debounced 10min, non-final). SessionEnd writes the final snapshot and pushes to GitHub. Both async so they survive the parent CC process exiting.",
   "hooks": {
     "Stop": [
       {
