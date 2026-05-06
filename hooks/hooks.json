@@ -1,3 +1,32 @@
 {
-  "description": "Everywhere plugin hooks placeholder. Real hooks (type: agent) are registered in ~/.claude/settings.json by /everywhere-setup."
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "_comment": "Stop snapshots periodically (debounced 10min, non-final). SessionEnd writes the final snapshot and pushes to GitHub. Both async so they survive the parent CC process exiting.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/snapshot.py\"",
+            "async": true,
+            "timeout": 120,
+            "statusMessage": "Everywhere: snapshotting session..."
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/snapshot.py\"",
+            "async": true,
+            "timeout": 180,
+            "statusMessage": "Everywhere: finalizing session memory..."
+          }
+        ]
+      }
+    ]
+  }
 }

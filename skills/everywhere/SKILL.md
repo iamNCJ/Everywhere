@@ -95,50 +95,71 @@ If `gh repo create` fails because the repo already exists, just get the URL and 
 
 #### 4. Register hooks in ~/.claude/settings.json
 
-Read the current `~/.claude/settings.json` (create it if missing). Add Stop and SessionEnd hooks using `type: "agent"` with the Haiku model. Merge carefully — preserve all existing settings.
-
-The hooks should read the prompt from the plugin's installed prompt files. Find the installed plugin directory first:
+The plugin ships its own `hooks/hooks.json` registering `Stop` and `SessionEnd` as `type: command + async: true`. **If the user has installed Everywhere via the plugin marketplace, they don't need to register hooks manually — enabling the plugin loads `hooks.json` automatically.** Detect that case first:
 
 ```bash
-find ~/.claude/plugins -name "stop-snapshot-prompt.md" 2>/dev/null | head -1
+python3 -c "
+import json, sys
+try:
+    with open('$HOME/.claude/plugins/installed_plugins.json') as f:
+        d = json.load(f)
+    plugins = d.get('plugins', {})
+    everywhere_keys = [k for k in plugins if k.startswith('everywhere@')]
+    if everywhere_keys:
+        print('plugin-installed:' + everywhere_keys[0])
+    else:
+        print('not-installed')
+except FileNotFoundError:
+    print('not-installed')
+"
 ```
 
-If found, use `cat` on that path as the prompt source. Write the hooks to settings.json:
+If `plugin-installed`, tell the user: "Plugin already enabled — hooks load automatically from `hooks/hooks.json`. Just run `/hooks` to reload, or start a fresh session."
+
+Otherwise (development install or not yet on a marketplace), register the hooks directly in `~/.claude/settings.json` using **absolute paths** to this plugin's `snapshot.py`. Find the script first:
+
+```bash
+# 1. If the plugin lives under ~/.claude/plugins/cache/, prefer that path:
+find ~/.claude/plugins/cache -path "*everywhere*/hooks/snapshot.py" 2>/dev/null | head -1
+# 2. Otherwise, ask the user where they cloned the repo and use that hooks/snapshot.py path.
+```
+
+Read `~/.claude/settings.json` (create if missing), merge the hook block below (preserving every other setting), and write back. **Use absolute paths** in the `command` field — `${CLAUDE_PLUGIN_ROOT}` only resolves for plugins loaded via marketplace.
 
 ```json
 {
   "hooks": {
     "Stop": [{
       "hooks": [{
-        "type": "agent",
-        "model": "claude-haiku-4-5-20251001",
+        "type": "command",
+        "command": "python3 \"<ABS_PATH>/hooks/snapshot.py\"",
         "async": true,
         "timeout": 120,
-        "statusMessage": "Everywhere: saving snapshot...",
-        "prompt": "<contents of stop-snapshot-prompt.md>"
+        "statusMessage": "Everywhere: snapshotting session..."
       }]
     }],
     "SessionEnd": [{
       "hooks": [{
-        "type": "agent",
-        "model": "claude-haiku-4-5-20251001",
+        "type": "command",
+        "command": "python3 \"<ABS_PATH>/hooks/snapshot.py\"",
         "async": true,
         "timeout": 180,
-        "statusMessage": "Everywhere: finalizing session memory...",
-        "prompt": "<contents of session-end-prompt.md>"
+        "statusMessage": "Everywhere: finalizing session memory..."
       }]
     }]
   }
 }
 ```
 
-Use the Read tool to load `~/.claude/settings.json`, merge the hooks section (preserve existing hooks), then write back with the Edit tool. Validate JSON after writing:
+Replace `<ABS_PATH>` with the actual plugin directory. Validate JSON after writing:
 
 ```bash
 python3 -c "import json; json.load(open('$HOME/.claude/settings.json')); print('valid')"
 ```
 
-Tell the user: "Hooks registered. They will take effect after restarting Claude Code (or run `/hooks` to reload)."
+Tell the user: "Hooks registered (`type: command`, `async: true`). They take effect on the next session or after running `/hooks` to reload."
+
+**Why this design:** `type: agent` is documented as experimental. `type: command` runs a deterministic shell call to `snapshot.py`, which uses `claude -p` only for the summary-generation step. `async: true` makes the hook survive parent CC exit (so `/exit` and Ctrl-C reliably get a final snapshot).
 
 #### 5. Print setup summary
 
