@@ -271,11 +271,49 @@ Manually trigger a full session save right now, following the same logic as the 
 
 #### 1. Find the current session transcript
 
+Detect which agent we're running in. If the environment variable `CODEX_HOME` is set, or `~/.codex/sessions/` exists and a recent rollout matches the current `cwd`, treat this as a Codex session. Otherwise, treat it as a Claude Code session.
+
+**Claude Code:**
 ```bash
 ls -t ~/.claude/projects/$(echo "$PWD" | sed 's|^/||; s|/|-|g')/*.jsonl 2>/dev/null | head -1
 ```
 
-This returns the most recently modified session for the current directory. If multiple sessions exist, this picks the newest — which is usually correct. If no file is found, tell the user no transcript was found for the current directory and exit.
+**Codex CLI:**
+```bash
+python3 - <<'PY'
+import json, os, sys
+from pathlib import Path
+
+cwd = os.environ["PWD"]
+root = Path.home() / ".codex" / "sessions"
+candidates = sorted(root.rglob("rollout-*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+for p in candidates[:50]:
+    try:
+        with open(p) as f:
+            first = f.readline()
+        meta = json.loads(first)
+        if meta.get("type") == "session_meta" and meta.get("payload", {}).get("cwd") == cwd:
+            print(p)
+            sys.exit(0)
+    except Exception:
+        continue
+sys.exit(1)
+PY
+```
+
+If Codex case: shell out to the sweeper with the discovered path:
+
+```bash
+EVERYWHERE_DEBUG=1 python3 <ABS_PLUGIN_ROOT>/hooks/snapshot.py --codex-sweep
+```
+
+Then verify the latest finalized session for this project:
+
+```bash
+ls -t ~/agent-memory/projects/$(basename "$PWD")/sessions/ | head -1
+```
+
+For the Claude case, continue with the original step-by-step logic below.
 
 #### 2. Extract project info from the transcript
 
