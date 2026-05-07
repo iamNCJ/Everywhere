@@ -115,7 +115,7 @@ Dispatch:
   Read `tmpfile` to get the assistant's final plain-text message. Strip ```json``` fences (reuse existing regex). `json.loads` → dict. Validate same `{summary, decisions, artifacts, excerpts, tags}` contract.
 - `--ephemeral` is **required**. Without it, this very call writes a rollout into `~/.codex/sessions/`, which the next sweep would pick up and try to summarize.
 
-**Default Codex summarizer model:** `gpt-5-mini`. Override via env var `EVERYWHERE_CODEX_MODEL` or via `~/agent-memory/.config.toml` key `codex_summarizer_model`. (Config file is read once at process start; not present → defaults apply.)
+**Default Codex summarizer model:** `gpt-5.4-mini` — verified working on ChatGPT-account Codex installs (`gpt-5-mini`/`gpt-5-nano` are not exposed there). Override via env var `EVERYWHERE_CODEX_MODEL`. (A `~/agent-memory/.config.toml` key was originally proposed but not implemented; env var covers the use case. The launchd plist sets the env var inline, so per-machine overrides go in the plist.)
 
 `SUMMARY_PROMPT` is reused verbatim — both summarizers must produce JSON with exactly `{summary, decisions, artifacts, excerpts, tags}` and no fences/prose.
 
@@ -159,13 +159,14 @@ A new section appended to the existing `skills/everywhere/SKILL.md`. Steps:
 
 1. **Prerequisites.** Check `codex --version` and `test -d ~/agent-memory/.git`. If memory repo missing, instruct user to run `/everywhere-setup` first and exit.
 2. **Locate the plugin directory.** Same logic as the current `/everywhere-setup` (try `~/.claude/plugins/cache/*everywhere*/hooks/snapshot.py`, else ask).
-3. **Write the plist** to `~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist` with `<ABS_PLUGIN_ROOT>` and `<HOME>` substituted.
-4. **Bootstrap:** `launchctl bootstrap gui/$UID <plist>`. If a previous label exists, `launchctl bootout` first then re-bootstrap.
-5. **Verify:** `launchctl print gui/$UID/dev.everywhere.codex-sweeper | head` — surface the result to the user.
-6. **Kick once:** `launchctl kickstart gui/$UID/dev.everywhere.codex-sweeper` so the first sweep runs immediately and the user sees output in `codex-sweep.log`.
-7. **Report:** plist path, log path, scan interval (5 min), idle threshold for finality (10 min).
+3. **Stage hooks to a TCC-safe location.** macOS Transparency, Consent, and Control (TCC) blocks `launchd`-spawned processes from reading paths inside `~/Documents/`, `~/Desktop/`, and `~/Downloads/` without explicit Full Disk Access. To avoid forcing the user through Privacy & Security settings, the setup copies `hooks/{snapshot,codex_sweep,summarizer,__init__}.py` to `~/.everywhere/hooks/` (TCC-safe) and points the plist there. Re-running setup refreshes the staged copies after a plugin update.
+4. **Write the plist** to `~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist` substituting `__ABS_PLUGIN_ROOT__` → `$HOME/.everywhere` (the staging path from step 3) and `__HOME__` → `$HOME`.
+5. **Bootstrap:** `launchctl bootstrap gui/$UID <plist>`. If a previous label exists, `launchctl bootout` first then re-bootstrap.
+6. **Verify:** `launchctl print gui/$UID/dev.everywhere.codex-sweeper | head` — surface the result to the user. Then `launchctl kickstart` so the first sweep runs immediately and the user sees output in `codex-sweep.log`.
+7. **Optional Codex-side skill install:** copy `skills/everywhere/SKILL.md` to `~/.codex/skills/everywhere/SKILL.md` so `/recall`, `/memory on`, etc. work from inside Codex too.
+8. **Report:** staged hooks path, plist path, log path, scan interval (5 min), idle threshold for finality (10 min). Confirm `~/.codex/config.toml` `notify` was not modified.
 
-A symmetric `/everywhere-codex-uninstall` section: `launchctl bootout` and delete the plist.
+A symmetric `/everywhere-codex-uninstall` section: `launchctl bootout`, delete the plist, `rm -rf ~/.everywhere`. Memory repo and existing session files are left untouched.
 
 ### C6. Codex-side command support
 
@@ -185,7 +186,7 @@ The existing `skills/everywhere/SKILL.md` is platform-neutral except for the hoo
 4. Walk last 7 days of `~/.codex/sessions/`. `abc123.jsonl` mtime is 30s old → newer than cursor's `last_snapshot_at` (unset).
 5. Parse: 12 messages, 6 user, `cwd = .../foo`, `started_at = 2026-05-06T...`.
 6. `now - mtime = 30s` → not idle enough for final. `mtime > last_snapshot_at + 600s` (vacuously true) → incremental snapshot.
-7. `summarize(..., agent="codex", model="gpt-5-mini")` → JSON.
+7. `summarize(..., agent="codex", model="gpt-5.4-mini")` → JSON.
 8. Write five files into `projects/foo/sessions/2026-05-06-abc123/`. `meta.yaml` has `agent: codex`, `is_final: false`, `snapshot_count: 0`.
 9. Update `PROJECT.md` and `INDEX.md`.
 10. Update cursor: `last_mtime`, `last_snapshot_at = now`, `is_final: false`. **No git commit/push** this sweep — files sit modified in the working tree until the next sweep finalizes something.
@@ -214,15 +215,12 @@ The existing `skills/everywhere/SKILL.md` is platform-neutral except for the hoo
 
 ## Configuration surface
 
-`~/agent-memory/.config.toml` (new file, optional):
+As shipped:
+- **Env var** `EVERYWHERE_CODEX_MODEL` overrides the Codex summarizer model (default `gpt-5.4-mini`). Set inline in the launchd plist's `EnvironmentVariables` block for persistence.
+- **Env var** `EVERYWHERE_DEBUG=1` (existing) verboses logging from the sweep.
+- **Sweep interval and finality threshold** are baked into the plist (`StartInterval`) and `hooks/codex_sweep.py` (`FINALITY_IDLE_SECONDS`) respectively. Tune by editing those files and re-running setup.
 
-```toml
-codex_summarizer_model = "gpt-5-mini"  # default if omitted
-codex_sweep_interval_seconds = 300     # only used if user regenerates the plist
-codex_finality_idle_seconds = 600
-```
-
-Env var `EVERYWHERE_CODEX_MODEL` overrides the model. `EVERYWHERE_DEBUG=1` (existing) verboses logging from the sweep.
+A `~/agent-memory/.config.toml` file was originally proposed for these knobs but was not implemented — the env-var-in-plist path covers all current use cases without adding a config-loading code path.
 
 ## Out-of-scope / follow-ups
 
