@@ -327,7 +327,8 @@ EVERYWHERE_DEBUG=1 python3 <ABS_PLUGIN_ROOT>/hooks/snapshot.py --codex-sweep
 Then verify the latest finalized session for this project:
 
 ```bash
-ls -t ~/agent-memory/projects/$(basename "$PWD")/sessions/ | head -1
+SLUG=$(python3 -c "import hashlib, os; p = os.path.abspath(os.environ['PWD']); print(f\"{os.path.basename(p) or 'unknown'}-{hashlib.sha256(p.encode()).hexdigest()[:8]}\")")
+ls -t ~/agent-memory/projects/"$SLUG"/sessions/ | head -1
 ```
 
 For the Claude case, continue with the original step-by-step logic below.
@@ -336,7 +337,7 @@ For the Claude case, continue with the original step-by-step logic below.
 
 Read the first lines of the JSONL file to find a line with a `cwd` field:
 - `project_path` = the value of `cwd`
-- `project_name` = `basename` of `project_path`
+- `project_name` = `{basename}-{hash8}` where `basename` is `basename(project_path)` and `hash8` is the first 8 hex chars of `sha256(abspath(project_path))` — disambiguates folders sharing a basename
 - `session_id` = stem of the JSONL filename (filename without `.jsonl`)
 - `started_at` = ISO 8601 timestamp from the first JSONL entry that has a `timestamp` field
 - `session_id_short` = first 6 characters of `session_id`
@@ -490,7 +491,7 @@ Inject the global INDEX.md and the current project's PROJECT.md into context.
 #### 1. Get current project name
 
 ```bash
-basename "$PWD"
+python3 -c "import hashlib, os; p = os.path.abspath(os.environ['PWD']); print(f\"{os.path.basename(p) or 'unknown'}-{hashlib.sha256(p.encode()).hexdigest()[:8]}\")"
 ```
 
 #### 2. Read INDEX.md

@@ -21,6 +21,7 @@ from hooks.snapshot import (
     update_index_md,
     git_commit_push,
     first_sentence,
+    project_slug,
 )
 from hooks.summarizer import summarize, DEFAULT_CODEX_MODEL
 
@@ -193,7 +194,7 @@ def _handle_rollout(rollout: Path, cursor: dict, now: float, memory_repo: Path) 
         _err(f"{session_id[:8]} summary missing keys: {missing}")
         return False
 
-    project_name = os.path.basename(cwd) or "unknown"
+    project_name = project_slug(cwd)
     date_str = (started_at or datetime.now(timezone.utc).isoformat())[:10]
     session_short = session_id[:6]
     session_dir = (

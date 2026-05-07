@@ -24,4 +24,12 @@ if [ -z "$CWD" ]; then
     echo "Warning: could not extract CWD from transcript" >&2
 fi
 echo "CWD: $CWD"
-echo "Project name: $(basename "$CWD")"
+SLUG=$(CWD="$CWD" python3 -c "
+import hashlib, os
+cwd = os.environ.get('CWD', '')
+abs_path = os.path.abspath(cwd) if cwd else ''
+basename = os.path.basename(abs_path) or 'unknown'
+h = hashlib.sha256(abs_path.encode('utf-8')).hexdigest()[:8]
+print(f'{basename}-{h}')
+")
+echo "Project name: $SLUG"

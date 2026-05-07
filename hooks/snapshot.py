@@ -15,6 +15,7 @@ from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -46,6 +47,18 @@ def log(msg: str) -> None:
 
 def err(msg: str) -> None:
     print(f"[everywhere] ERROR: {msg}", file=sys.stderr, flush=True)
+
+
+def project_slug(cwd: str) -> str:
+    """Stable project identifier for the memory repo: ``{basename}-{hash8}``.
+
+    The 8-char hash of the absolute path disambiguates folders that share a
+    basename across the filesystem (e.g. ``~/work/foo`` vs ``~/personal/foo``).
+    """
+    abs_path = os.path.abspath(cwd) if cwd else os.path.abspath(".")
+    basename = os.path.basename(abs_path) or "unknown"
+    h = hashlib.sha256(abs_path.encode("utf-8")).hexdigest()[:8]
+    return f"{basename}-{h}"
 
 
 # ---------- transcript parsing ----------
@@ -410,7 +423,7 @@ def main():
         log(f"only {user_count} user messages; skip (need >= {MIN_USER_MESSAGES})")
         return
 
-    project_name = os.path.basename(cwd) or "unknown"
+    project_name = project_slug(cwd)
     date_str = (started_at or datetime.now(timezone.utc).isoformat())[:10]
     session_short = session_id[:6]
     session_dir = (
