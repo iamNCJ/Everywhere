@@ -211,6 +211,42 @@ git -C ~/agent-memory log origin/main..main   # empty = fully pushed
 
 ---
 
+## Step 8 — (Optional) Codex CLI capture
+
+If the user also uses Codex CLI and wants its sessions captured into the same
+`~/agent-memory/`, install the Codex sweeper. macOS only.
+
+```bash
+codex --version              # verify Codex CLI is installed
+```
+
+Then invoke `/everywhere-codex-setup` inside Claude Code. The skill walks
+through:
+
+1. Stage hooks to `~/.everywhere/hooks/` (TCC-safe location — launchd can't
+   read `~/Documents/` without Full Disk Access, so we copy out).
+2. Render `hooks/codex-sweeper.plist.template` with absolute paths and write
+   it to `~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist`.
+3. `launchctl bootstrap` the agent and `kickstart` once to verify.
+4. Optionally copy `SKILL.md` to `~/.codex/skills/everywhere/` so `/recall`
+   and `/memory on` work from inside Codex too.
+
+After install, Codex sessions are auto-captured every 5 min. Sessions idle
+for >10 min get a final commit + push. The sweeper does **not** modify
+`~/.codex/config.toml`, so any existing `notify` integrations keep working.
+
+Verify:
+
+```bash
+launchctl print gui/$UID/dev.everywhere.codex-sweeper | grep -E 'state|last exit'
+tail ~/agent-memory/.snapshots/codex-sweep.log
+grep -rl 'agent: "codex"' ~/agent-memory/projects/ | head    # after a session ends
+```
+
+To uninstall just the Codex side: invoke `/everywhere-codex-uninstall`.
+
+---
+
 ## Troubleshooting
 
 Re-run with debug logs to see what the hook is doing:
@@ -251,5 +287,10 @@ summary so you can verify file/git plumbing without burning tokens.
 # or for local clone: remove the Stop/SessionEnd hook blocks from
 # ~/.claude/settings.json by hand.
 ```
+
+If the Codex sweeper was installed, also run `/everywhere-codex-uninstall`
+(or manually: `launchctl bootout gui/$UID/dev.everywhere.codex-sweeper`,
+`rm -f ~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist`,
+`rm -rf ~/.everywhere`).
 
 The `~/agent-memory/` repo is left intact — delete it manually if desired.
