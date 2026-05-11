@@ -20,7 +20,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/snapshot.py\"",
-            "async": true,
+            "async": false,
             "timeout": 180,
             "statusMessage": "Everywhere: finalizing session memory..."
           }
