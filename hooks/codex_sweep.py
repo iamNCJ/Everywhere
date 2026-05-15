@@ -108,47 +108,6 @@ def _err(msg: str) -> None:
     print(f"[codex-sweep] ERROR: {msg}", file=sys.stderr, flush=True)
 
 
-def run_sweep(memory_repo: Path) -> int:
-    """Main sweep entrypoint. Returns process exit code (always 0 in practice)."""
-    snapshots_dir = memory_repo / ".snapshots"
-    snapshots_dir.mkdir(parents=True, exist_ok=True)
-
-    lock_path = snapshots_dir / ".codex-sweep.lock"
-    cursor_path = snapshots_dir / ".codex-cursor.json"
-
-    with open(lock_path, "w") as lockf:
-        try:
-            fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            _log("another sweep already running; exiting")
-            return 0
-
-        if not (memory_repo / ".git").exists():
-            _err(f"memory repo not initialized at {memory_repo}; run /everywhere-setup")
-            return 0
-
-        if not CODEX_SESSIONS_ROOT.exists():
-            _log(f"no Codex sessions directory at {CODEX_SESSIONS_ROOT}")
-            return 0
-
-        cursor = load_cursor(cursor_path)
-        now = time.time()
-        seen = 0
-        acted = 0
-        for rollout in _iter_rollouts(CODEX_SESSIONS_ROOT, SCAN_DAYS):
-            seen += 1
-            try:
-                handled = _handle_rollout(rollout, cursor, now, memory_repo)
-                if handled:
-                    acted += 1
-                    save_cursor(cursor_path, cursor)
-            except Exception as e:
-                _err(f"{rollout.name}: {e}")
-
-        _log(f"sweep complete: scanned={seen} acted={acted}")
-        return 0
-
-
 def _handle_rollout(
     rollout: Path,
     cursor: dict,
