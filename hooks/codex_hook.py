@@ -114,6 +114,9 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception as e:
+    except BaseException as e:
+        # Fail-silent: a misbehaving hook must never block the user.
+        # BaseException (not Exception) so argparse's SystemExit on bad
+        # invocations doesn't surface as a non-zero hook exit.
         err(f"unhandled: {e}")
-        sys.exit(0)
+    sys.exit(0)

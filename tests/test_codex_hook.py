@@ -68,7 +68,6 @@ def test_handle_rollout_incremental_disabled_skips_active(tmp_path, memory_repo)
     assert handled is False
 
 
-import subprocess
 from hooks import codex_hook
 
 
