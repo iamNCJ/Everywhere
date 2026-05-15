@@ -92,3 +92,41 @@ def test_uninstall_missing_file_is_noop(tmp_path):
     # Must not raise.
     uninstall_hooks_json(hooks_path)
     assert not hooks_path.exists()
+
+
+def test_install_recovers_from_corrupt_json(tmp_path):
+    hooks_path = tmp_path / "hooks.json"
+    hooks_path.write_text("{ not valid json")
+
+    install_hooks_json(hooks_path, staged_dir="/home/u/.everywhere/hooks")
+
+    data = _read(hooks_path)
+    assert "Stop" in data["hooks"]
+    assert "SessionStart" in data["hooks"]
+
+
+def test_install_recovers_from_malformed_event_value(tmp_path):
+    """Event value is a string instead of a list — install treats as empty."""
+    hooks_path = tmp_path / "hooks.json"
+    hooks_path.write_text(json.dumps({"hooks": {"Stop": "bad"}}))
+
+    install_hooks_json(hooks_path, staged_dir="/home/u/.everywhere/hooks")
+
+    data = _read(hooks_path)
+    assert isinstance(data["hooks"]["Stop"], list)
+    assert len(data["hooks"]["Stop"]) == 1
+
+
+def test_uninstall_skips_malformed_event_value(tmp_path):
+    hooks_path = tmp_path / "hooks.json"
+    hooks_path.write_text(json.dumps({"hooks": {"Stop": "bad", "Other": [
+        {"hooks": [{"type": "command", "command": "/usr/local/bin/x"}]}
+    ]}}))
+
+    # Must not raise.
+    uninstall_hooks_json(hooks_path)
+
+    data = _read(hooks_path)
+    # Malformed value is preserved as-is (not our concern).
+    assert data["hooks"]["Stop"] == "bad"
+    assert data["hooks"]["Other"][0]["hooks"][0]["command"] == "/usr/local/bin/x"

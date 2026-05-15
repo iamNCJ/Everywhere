@@ -189,7 +189,9 @@ def install_hooks_json(hooks_path: Path, staged_dir: str) -> None:
         ("SessionStart", _our_sessionstart_entry),
     ):
         existing = data["hooks"].get(event, [])
-        kept = [e for e in existing if not _entry_is_ours(e)]
+        if not isinstance(existing, list):
+            existing = []
+        kept = [e for e in existing if isinstance(e, dict) and not _entry_is_ours(e)]
         kept.append(builder(staged_dir))
         data["hooks"][event] = kept
 
@@ -209,7 +211,10 @@ def uninstall_hooks_json(hooks_path: Path) -> None:
         return
 
     for event in list(data["hooks"].keys()):
-        kept = [e for e in data["hooks"][event] if not _entry_is_ours(e)]
+        value = data["hooks"][event]
+        if not isinstance(value, list):
+            continue
+        kept = [e for e in value if isinstance(e, dict) and not _entry_is_ours(e)]
         if kept:
             data["hooks"][event] = kept
         else:
