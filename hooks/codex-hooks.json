@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nohup python3 -u \"${CODEX_PLUGIN_ROOT}/hooks/codex_hook.py\" stop >/dev/null 2>&1 &",
+            "command": "T=$(mktemp); cat > \"$T\"; (python3 -u \"${CODEX_PLUGIN_ROOT}/hooks/codex_hook.py\" stop < \"$T\" >/dev/null 2>&1; rm -f \"$T\") &",
             "timeout": 5
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nohup python3 -u \"${CODEX_PLUGIN_ROOT}/hooks/codex_hook.py\" finalize-sweep >/dev/null 2>&1 &",
+            "command": "T=$(mktemp); cat > \"$T\"; (python3 -u \"${CODEX_PLUGIN_ROOT}/hooks/codex_hook.py\" finalize-sweep < \"$T\" >/dev/null 2>&1; rm -f \"$T\") &",
             "timeout": 5
           }
         ]

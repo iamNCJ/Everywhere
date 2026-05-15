@@ -21,10 +21,31 @@ def test_install_creates_file_when_missing(tmp_path):
     assert "Stop" in data["hooks"]
     assert "SessionStart" in data["hooks"]
     cmd = data["hooks"]["Stop"][0]["hooks"][0]["command"]
-    assert "/home/u/.everywhere/hooks/codex_hook.py stop" in cmd
+    assert "/home/u/.everywhere/hooks/codex_hook.py" in cmd
+    assert " stop " in cmd
     cmd2 = data["hooks"]["SessionStart"][0]["hooks"][0]["command"]
     assert "finalize-sweep" in cmd2
     assert data["hooks"]["SessionStart"][0]["matcher"] == "startup|resume"
+
+
+def test_install_command_captures_stdin_before_detach(tmp_path):
+    """Regression: plain `nohup ... &` drops stdin. The command must read
+    stdin to a tempfile synchronously, then run the script detached."""
+    hooks_path = tmp_path / "hooks.json"
+    install_hooks_json(hooks_path, staged_dir="/home/u/.everywhere/hooks")
+
+    data = _read(hooks_path)
+    for event in ("Stop", "SessionStart"):
+        cmd = data["hooks"][event][0]["hooks"][0]["command"]
+        # Must capture stdin to a tempfile before backgrounding the python child.
+        assert "mktemp" in cmd, f"{event} missing mktemp"
+        assert 'cat > "$T"' in cmd, f"{event} missing stdin capture"
+        # Python child must read FROM the captured tempfile, not the parent stdin.
+        assert '< "$T"' in cmd, f"{event} python child does not read from tempfile"
+        # Tempfile must be cleaned up.
+        assert 'rm -f "$T"' in cmd, f"{event} missing tempfile cleanup"
+        # The whole thing must background (trailing &).
+        assert cmd.rstrip().endswith("&"), f"{event} not backgrounded"
 
 
 def test_install_is_idempotent(tmp_path):

@@ -133,15 +133,29 @@ def run_finalize_sweep() -> None:
 HOOK_MARKER = "/.everywhere/hooks/codex_hook.py"
 
 
+def _detached_command(staged_dir: str, subcommand: str) -> str:
+    """Shell snippet that reads stdin synchronously to a tempfile, then runs
+    codex_hook.py detached in a background subshell.
+
+    Codex backgrounding via plain `nohup ... &` drops stdin (FD 0 is severed
+    when the parent shell forks the background process), so we must capture
+    the JSON payload before detaching. The tempfile is removed after the
+    subprocess exits.
+    """
+    script = f"{staged_dir}/codex_hook.py"
+    return (
+        "T=$(mktemp); cat > \"$T\"; "
+        f"(python3 -u \"{script}\" {subcommand} < \"$T\" >/dev/null 2>&1; "
+        "rm -f \"$T\") &"
+    )
+
+
 def _our_stop_entry(staged_dir: str) -> dict:
     return {
         "hooks": [
             {
                 "type": "command",
-                "command": (
-                    f"nohup python3 -u {staged_dir}/codex_hook.py stop "
-                    f">/dev/null 2>&1 &"
-                ),
+                "command": _detached_command(staged_dir, "stop"),
                 "timeout": 5,
             }
         ]
@@ -154,10 +168,7 @@ def _our_sessionstart_entry(staged_dir: str) -> dict:
         "hooks": [
             {
                 "type": "command",
-                "command": (
-                    f"nohup python3 -u {staged_dir}/codex_hook.py finalize-sweep "
-                    f">/dev/null 2>&1 &"
-                ),
+                "command": _detached_command(staged_dir, "finalize-sweep"),
                 "timeout": 5,
             }
         ]
