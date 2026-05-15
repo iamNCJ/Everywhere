@@ -41,9 +41,12 @@ Native hooks on both agents feed the same `~/agent-memory/`:
   summarizer call from itself producing a rollout.
 
 Sessions with fewer than 3 user messages are skipped on both paths. The Codex
-setup does **not** modify `~/.codex/config.toml` — it only touches
-`~/.codex/hooks.json` and preserves any pre-existing user-owned hook entries.
-Existing `notify` integrations (e.g., Computer Use) keep working.
+setup touches **only** `~/.codex/hooks.json` (preserving any pre-existing
+user-owned hook entries) and the `[hooks.state]` block in `~/.codex/config.toml`
+that records the user's trust of our hooks (so Codex doesn't prompt on first
+launch). Every other section of `config.toml` — `model`, `notify`, `projects`,
+`plugins`, other `[hooks.state]` entries for hooks the user trusted manually —
+is untouched. Existing `notify` integrations (e.g., Computer Use) keep working.
 
 Note: Codex finalize runs at the **next** Codex launch, not at session exit
 (Codex CLI has no `SessionEnd` event as of 0.130.0). If you go a week without

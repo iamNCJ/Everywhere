@@ -235,14 +235,19 @@ through:
    debounced snapshot) and a `SessionStart` hook (finalize idle rollouts on
    the next Codex launch). The merge preserves any existing user-owned hook
    entries.
+4. Write pre-trust records into `~/.codex/config.toml` under `[hooks.state]`
+   so Codex doesn't prompt the user to "trust" each hook on first launch.
+   Only the two `[hooks.state]` keys for our hooks are written — every other
+   section of `config.toml` is untouched.
 4. Optionally copy `SKILL.md` to `~/.codex/skills/everywhere/` so `/recall`
    and `/memory on` work from inside Codex too.
 
 After install, Codex sessions are auto-captured at end of every turn
 (debounced 10 min). Sessions idle for >10 min get a final commit + push on
-the **next** Codex launch (Codex CLI has no `SessionEnd` event). The setup
-does **not** modify `~/.codex/config.toml`, so any existing `notify`
-integrations keep working.
+the **next** Codex launch (Codex CLI has no `SessionEnd` event). Setup
+touches only the `[hooks.state]` keys for our two hooks in `config.toml`
+(to pre-approve them); `notify`, `model`, project trust, plugin enablement,
+and any other `[hooks.state]` entries are untouched.
 
 Verify:
 

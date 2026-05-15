@@ -224,14 +224,21 @@ cp "$PLUGIN/hooks/snapshot.py" "$PLUGIN/hooks/codex_hook.py" \
 
 Re-running `/everywhere-codex-setup` refreshes these copies (run after plugin updates).
 
-#### 5. Merge entries into `~/.codex/hooks.json`
+#### 5. Merge entries into `~/.codex/hooks.json` and pre-trust them in `config.toml`
+
+Codex requires the user to "trust" each newly-registered hook (TUI prompt
+on first launch). We pre-write the trust record into `~/.codex/config.toml`
+so the user isn't prompted — running this setup IS the consent.
 
 ```bash
 PYTHONPATH="$HOME/.everywhere" python3 -c "
 from pathlib import Path
-from hooks.codex_hook import install_hooks_json
-install_hooks_json(Path.home() / '.codex' / 'hooks.json',
+from hooks.codex_hook import install_hooks_json, trust_hooks_in_config
+hooks_path = Path.home() / '.codex' / 'hooks.json'
+config_path = Path.home() / '.codex' / 'config.toml'
+install_hooks_json(hooks_path,
                    staged_dir=str(Path.home() / '.everywhere' / 'hooks'))
+trust_hooks_in_config(config_path, hooks_path)
 print('ok')
 "
 ```
@@ -240,9 +247,12 @@ Verify:
 
 ```bash
 python3 -c "import json; print(json.dumps(json.load(open('$HOME/.codex/hooks.json')), indent=2))" | head -40
+grep -A2 '\[hooks.state.\"'"$HOME"'/.codex/hooks.json' ~/.codex/config.toml
 ```
 
-Expected: two entries under `"hooks"` (`Stop` and `SessionStart`), each command line pointing at `~/.everywhere/hooks/codex_hook.py`. Any pre-existing user-owned hook entries are preserved.
+Expected:
+- Two entries under `"hooks"` in `hooks.json` (`Stop` and `SessionStart`), each command pointing at `~/.everywhere/hooks/codex_hook.py`. Any pre-existing user-owned hook entries are preserved.
+- Two `[hooks.state]` blocks in `config.toml` with `enabled = true` and a `trusted_hash` matching the registered commands. All other config keys (model, notify, projects, plugins, etc.) are untouched; pre-existing `[hooks.state]` entries for other hooks are preserved.
 
 #### 6. Smoke test
 
@@ -269,26 +279,31 @@ Tell the user:
 - Staged hooks: `~/.everywhere/hooks/` (re-run setup after plugin updates)
 - Registered events: `Stop` (per-turn debounced snapshot) + `SessionStart` (finalize idle rollouts on next launch)
 - Hooks file: `~/.codex/hooks.json` (merged — your other hook entries preserved)
+- Hooks pre-trusted in `~/.codex/config.toml` under `[hooks.state]` — no first-launch TUI prompt. Only the `[hooks.state]` keys for our two hooks are touched; everything else in `config.toml` (model, notify, projects, plugins, other `[hooks.state]` entries) is left alone
 - Finalization runs on the **next** Codex launch (Codex has no `SessionEnd` event); if you stop using Codex for a while, the last in-progress rollout won't push until you launch Codex again
-- Codex `notify` setting and `~/.codex/config.toml` were **not** modified
 - Codex skill: installed at `~/.codex/skills/everywhere/SKILL.md` (if step 7 ran)
 
 ### `/everywhere-codex-uninstall`
 
 Removes Codex hook registrations and staged scripts. The memory repo and existing session files are untouched.
 
-#### 1. Remove hook entries from `~/.codex/hooks.json`
+#### 1. Remove hook entries from `~/.codex/hooks.json` and clear their trust records
 
 ```bash
 PYTHONPATH="$HOME/.everywhere" python3 -c "
 from pathlib import Path
-from hooks.codex_hook import uninstall_hooks_json
-uninstall_hooks_json(Path.home() / '.codex' / 'hooks.json')
+from hooks.codex_hook import uninstall_hooks_json, untrust_hooks_in_config
+hooks_path = Path.home() / '.codex' / 'hooks.json'
+config_path = Path.home() / '.codex' / 'config.toml'
+untrust_hooks_in_config(config_path, hooks_path)
+uninstall_hooks_json(hooks_path)
 print('ok')
 "
 ```
 
-Entries whose command does **not** reference `~/.everywhere/hooks/codex_hook.py` are preserved. Empty events are dropped; if `hooks.json` ends up empty, the file is deleted.
+`uninstall_hooks_json`: entries whose command does **not** reference `~/.everywhere/hooks/codex_hook.py` are preserved. Empty events are dropped; if `hooks.json` ends up empty, the file is deleted.
+
+`untrust_hooks_in_config`: removes only `[hooks.state]` entries keyed at our `hooks.json` path. Other `[hooks.state]` entries (and every other section of `config.toml`) are untouched. The bare `[hooks.state]` header is dropped if no entries remain.
 
 #### 2. Best-effort launchd cleanup (for users upgrading from the old install)
 

@@ -19,6 +19,7 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import sys
@@ -236,6 +237,178 @@ def uninstall_hooks_json(hooks_path: Path) -> None:
         return
 
     hooks_path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+# ---------- Codex config.toml [hooks.state] pre-trust ----------
+#
+# Codex prompts the user (TUI) to "trust" each newly-registered hook before
+# running it, then records the approval in [hooks.state] blocks in
+# ~/.codex/config.toml as sha256(command_string). We pre-write those blocks
+# at install time so the user isn't prompted on first launch — the act of
+# running /everywhere-codex-setup is the consent.
+#
+# We only touch [hooks.state.".../hooks.json:..."] keys whose path prefix
+# matches our hooks_path; other [hooks.state] entries (for hooks the user
+# trusted manually) are preserved.
+
+
+def _hash_command(cmd: str) -> str:
+    return "sha256:" + hashlib.sha256(cmd.encode("utf-8")).hexdigest()
+
+
+def _event_snake(event: str) -> str:
+    """Convert Codex hook event CamelCase ('SessionStart', 'PreToolUse') to
+    snake_case ('session_start', 'pre_tool_use') as used in [hooks.state] keys."""
+    out = []
+    for i, ch in enumerate(event):
+        if i > 0 and ch.isupper() and not event[i - 1].isupper():
+            out.append("_")
+        out.append(ch.lower())
+    return "".join(out)
+
+
+def _collect_our_trust_entries(hooks_path: Path) -> list[tuple[str, str]]:
+    """Return ``[(trust_key, command_hash), ...]`` for every entry of ours
+    in ``hooks_path``. Trust key format: ``"<hooks_path>:<event_lower>:<i>:<j>"``."""
+    if not hooks_path.exists():
+        return []
+    try:
+        data = json.loads(hooks_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    out: list[tuple[str, str]] = []
+    for event, entries in (data.get("hooks") or {}).items():
+        if not isinstance(entries, list):
+            continue
+        for outer_idx, entry in enumerate(entries):
+            if not isinstance(entry, dict) or not _entry_is_ours(entry):
+                continue
+            for inner_idx, h in enumerate(entry.get("hooks", [])):
+                cmd = h.get("command", "") if isinstance(h, dict) else ""
+                if HOOK_MARKER not in cmd:
+                    continue
+                key = f"{hooks_path}:{_event_snake(event)}:{outer_idx}:{inner_idx}"
+                out.append((key, _hash_command(cmd)))
+    return out
+
+
+def _strip_hooks_state_blocks(text: str) -> str:
+    """Remove every ``[hooks.state...]`` block from ``text`` (header line plus
+    its body lines, stopping at the next table header). Preserves leading and
+    trailing newlines on adjacent content."""
+    out: list[str] = []
+    in_state = False
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if stripped.startswith("[") and not stripped.startswith("[["):
+            in_state = stripped.startswith("[hooks.state")
+            if in_state:
+                continue
+        if in_state:
+            continue
+        out.append(line)
+    # Drop trailing blank lines we may have left behind.
+    while out and out[-1].strip() == "":
+        out.pop()
+    return "".join(out)
+
+
+def _parse_hooks_state(text: str) -> dict[str, dict]:
+    """Pull existing ``[hooks.state."key"]`` entries out of a TOML text and
+    return them as ``{key: {enabled, trusted_hash}}``. Tolerant of malformed
+    files: skips blocks it can't parse."""
+    state: dict[str, dict] = {}
+    current_key: str | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[hooks.state.\"") and stripped.endswith("]"):
+            try:
+                key = stripped.split('"', 2)[1]
+            except IndexError:
+                current_key = None
+                continue
+            current_key = key
+            state.setdefault(current_key, {})
+        elif stripped.startswith("[") and not stripped.startswith("[["):
+            current_key = None
+        elif current_key is not None and "=" in stripped:
+            field, _, value = stripped.partition("=")
+            field = field.strip()
+            value = value.strip()
+            if field == "enabled":
+                state[current_key]["enabled"] = value == "true"
+            elif field == "trusted_hash":
+                state[current_key]["trusted_hash"] = value.strip('"')
+    return state
+
+
+def _emit_hooks_state(state: dict[str, dict]) -> str:
+    """Render a ``hooks.state`` dict back to TOML, ending with a newline."""
+    if not state:
+        return ""
+    lines = ["[hooks.state]"]
+    for key in sorted(state):
+        entry = state[key]
+        lines.append("")
+        lines.append(f"[hooks.state.\"{key}\"]")
+        if "enabled" in entry:
+            lines.append(f"enabled = {'true' if entry['enabled'] else 'false'}")
+        if "trusted_hash" in entry:
+            lines.append(f"trusted_hash = \"{entry['trusted_hash']}\"")
+    return "\n".join(lines) + "\n"
+
+
+def trust_hooks_in_config(config_path: Path, hooks_path: Path) -> None:
+    """Write/refresh ``[hooks.state]`` entries for our hooks in ``config_path``
+    so Codex doesn't prompt on first launch. Other config keys are left
+    untouched; other users' ``[hooks.state]`` entries are preserved."""
+    needed = _collect_our_trust_entries(hooks_path)
+    if not needed:
+        return
+
+    text = config_path.read_text() if config_path.exists() else ""
+    existing = _parse_hooks_state(text)
+
+    # Drop our keys (we're replacing), keep others.
+    our_keys = {key for key, _ in needed}
+    preserved = {k: v for k, v in existing.items() if k not in our_keys}
+    for key, cmd_hash in needed:
+        preserved[key] = {"enabled": True, "trusted_hash": cmd_hash}
+
+    stripped = _strip_hooks_state_blocks(text)
+    new_text = stripped.rstrip()
+    if new_text:
+        new_text += "\n\n"
+    new_text += _emit_hooks_state(preserved)
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(new_text)
+
+
+def untrust_hooks_in_config(config_path: Path, hooks_path: Path) -> None:
+    """Remove ``[hooks.state]`` entries that point at our ``hooks_path``.
+    Other entries are preserved; the ``[hooks.state]`` namespace header is
+    dropped if no entries remain."""
+    if not config_path.exists():
+        return
+    text = config_path.read_text()
+    existing = _parse_hooks_state(text)
+    prefix = f"{hooks_path}:"
+    preserved = {k: v for k, v in existing.items() if not k.startswith(prefix)}
+
+    stripped = _strip_hooks_state_blocks(text)
+    new_text = stripped.rstrip()
+    rendered = _emit_hooks_state(preserved)
+    if rendered:
+        if new_text:
+            new_text += "\n\n"
+        new_text += rendered
+    elif new_text:
+        new_text += "\n"
+
+    config_path.write_text(new_text)
 
 
 def main():
