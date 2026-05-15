@@ -149,7 +149,15 @@ def run_sweep(memory_repo: Path) -> int:
         return 0
 
 
-def _handle_rollout(rollout: Path, cursor: dict, now: float, memory_repo: Path) -> bool:
+def _handle_rollout(
+    rollout: Path,
+    cursor: dict,
+    now: float,
+    memory_repo: Path,
+    *,
+    allow_incremental: bool = True,
+    allow_finalize: bool = True,
+) -> bool:
     mtime = rollout.stat().st_mtime
     session_id, cwd, started_at, messages = parse_codex_transcript(rollout)
     if session_id is None:
@@ -158,6 +166,10 @@ def _handle_rollout(rollout: Path, cursor: dict, now: float, memory_repo: Path) 
     action = decide_action(mtime, now, cursor.get(session_id))
     _log(f"{session_id[:8]} mtime_age={int(now-mtime)}s action={action}")
     if action == "skip":
+        return False
+    if action == "incremental" and not allow_incremental:
+        return False
+    if action == "finalize" and not allow_finalize:
         return False
 
     user_count = sum(1 for m in messages if m["role"] == "user")
