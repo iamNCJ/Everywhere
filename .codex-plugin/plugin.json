@@ -1,0 +1,11 @@
+{
+  "name": "everywhere",
+  "version": "1.1.0",
+  "description": "Automatically persists every Codex CLI session to a searchable global memory repository synced to GitHub",
+  "author": {
+    "name": "ncj",
+    "email": "me@ncj.wiki"
+  },
+  "hooks": "./hooks/codex-hooks.json",
+  "skills": "./skills/"
+}

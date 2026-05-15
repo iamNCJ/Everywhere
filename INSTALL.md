@@ -214,33 +214,42 @@ git -C ~/agent-memory log origin/main..main   # empty = fully pushed
 ## Step 8 — (Optional) Codex CLI capture
 
 If the user also uses Codex CLI and wants its sessions captured into the same
-`~/agent-memory/`, install the Codex sweeper. macOS only.
+`~/agent-memory/`, register Codex hooks. Cross-platform (anywhere Codex runs).
 
 ```bash
-codex --version              # verify Codex CLI is installed
+codex --version                                          # verify Codex CLI is installed
+codex features list 2>/dev/null | grep -q "^hooks .*true"  # must print nothing if OK
 ```
+
+Codex hooks are stable since `codex-cli >= 0.130.0`. If `hooks` shows as
+`under development`, run `codex update` first.
 
 Then invoke `/everywhere-codex-setup` inside Claude Code. The skill walks
 through:
 
-1. Stage hooks to `~/.everywhere/hooks/` (TCC-safe location — launchd can't
-   read `~/Documents/` without Full Disk Access, so we copy out).
-2. Render `hooks/codex-sweeper.plist.template` with absolute paths and write
-   it to `~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist`.
-3. `launchctl bootstrap` the agent and `kickstart` once to verify.
+1. (If upgrading from the launchd version) `launchctl bootout` the old job
+   and delete the plist.
+2. Stage hooks to `~/.everywhere/hooks/` so the registered `command` strings
+   in `~/.codex/hooks.json` use stable absolute paths.
+3. Merge two entries into `~/.codex/hooks.json`: a `Stop` hook (per-turn,
+   debounced snapshot) and a `SessionStart` hook (finalize idle rollouts on
+   the next Codex launch). The merge preserves any existing user-owned hook
+   entries.
 4. Optionally copy `SKILL.md` to `~/.codex/skills/everywhere/` so `/recall`
    and `/memory on` work from inside Codex too.
 
-After install, Codex sessions are auto-captured every 5 min. Sessions idle
-for >10 min get a final commit + push. The sweeper does **not** modify
-`~/.codex/config.toml`, so any existing `notify` integrations keep working.
+After install, Codex sessions are auto-captured at end of every turn
+(debounced 10 min). Sessions idle for >10 min get a final commit + push on
+the **next** Codex launch (Codex CLI has no `SessionEnd` event). The setup
+does **not** modify `~/.codex/config.toml`, so any existing `notify`
+integrations keep working.
 
 Verify:
 
 ```bash
-launchctl print gui/$UID/dev.everywhere.codex-sweeper | grep -E 'state|last exit'
-tail ~/agent-memory/.snapshots/codex-sweep.log
-grep -rl 'agent: "codex"' ~/agent-memory/projects/ | head    # after a session ends
+python3 -c "import json; print(json.dumps(json.load(open('$HOME/.codex/hooks.json')), indent=2))" | head -40
+EVERYWHERE_DEBUG=1 codex                                 # open a session, take a few turns, /exit
+grep -rl 'agent: codex' ~/agent-memory/projects/ | head  # after a turn fires
 ```
 
 To uninstall just the Codex side: invoke `/everywhere-codex-uninstall`.
@@ -288,9 +297,9 @@ summary so you can verify file/git plumbing without burning tokens.
 # ~/.claude/settings.json by hand.
 ```
 
-If the Codex sweeper was installed, also run `/everywhere-codex-uninstall`
-(or manually: `launchctl bootout gui/$UID/dev.everywhere.codex-sweeper`,
-`rm -f ~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist`,
-`rm -rf ~/.everywhere`).
+If Codex capture was installed, also run `/everywhere-codex-uninstall`. It
+removes our entries from `~/.codex/hooks.json` (preserving any user-owned
+hooks), best-effort cleans up the legacy launchd plist (if upgrading from
+an old install), and removes `~/.everywhere/hooks/`.
 
 The `~/agent-memory/` repo is left intact — delete it manually if desired.

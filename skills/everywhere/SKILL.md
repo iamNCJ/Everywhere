@@ -7,7 +7,7 @@ description: Use when the user invokes /everywhere-setup, /everywhere-codex-setu
 
 > *Your agent sessions, accessible everywhere.*
 
-Everywhere persists Claude Code and Codex CLI sessions to `~/agent-memory/` synced to GitHub. For Claude, run `/everywhere-setup` to register Stop/SessionEnd hooks. For Codex, run `/everywhere-codex-setup` to install a launchd sweeper that polls `~/.codex/sessions/` every 5 minutes. Both feed the same memory repo; `meta.yaml.agent` distinguishes the source. Use the commands below for manual control and retrieval.
+Everywhere persists Claude Code and Codex CLI sessions to `~/agent-memory/` synced to GitHub. For Claude, run `/everywhere-setup` to register Stop/SessionEnd hooks. For Codex, run `/everywhere-codex-setup` to register Codex `Stop` and `SessionStart` hooks that capture each turn and finalize idle sessions on the next launch. Both feed the same memory repo; `meta.yaml.agent` distinguishes the source. Use the commands below for manual control and retrieval.
 
 ## Commands
 
@@ -171,77 +171,88 @@ Report:
 
 ### `/everywhere-codex-setup`
 
-One-time setup for capturing Codex CLI sessions into the same memory repo. macOS only.
+Registers Codex CLI `Stop` and `SessionStart` hooks that auto-capture sessions into the same memory repo. Cross-platform (anywhere Codex CLI runs).
 
 #### 1. Check prerequisites
 
 ```bash
 codex --version
-test -d ~/agent-memory/.git && echo "ok" || echo "missing"
+codex features list 2>/dev/null | grep -q "^hooks .*true" && echo "hooks-ok" || echo "hooks-missing"
+test -d ~/agent-memory/.git && echo "repo-ok" || echo "repo-missing"
 ```
 
-If `codex` is missing: tell the user to install Codex CLI first (`brew install codex`) and re-invoke.
-If the memory repo is missing: tell the user to run `/everywhere-setup` first and exit.
+If `codex` is missing: tell the user to install Codex CLI first and re-invoke.
+If `hooks-missing`: Codex < 0.130.0 — tell the user to upgrade (`codex update`) and re-invoke.
+If `repo-missing`: tell the user to run `/everywhere-setup` first and exit.
 
-#### 2. Locate the plugin directory
+#### 2. Migrate from legacy launchd install (best-effort)
+
+If the user previously installed Everywhere via the launchd sweeper, unload it:
+
+```bash
+LABEL=dev.everywhere.codex-sweeper
+if launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1; then
+  launchctl bootout "gui/$UID" "$HOME/Library/LaunchAgents/$LABEL.plist" 2>/dev/null || true
+  echo "[migrate] removed legacy launchd job $LABEL"
+fi
+rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
+```
+
+If the plist was found, tell the user the legacy launchd job was removed in favor of native Codex hooks.
+
+#### 3. Locate the plugin directory
 
 ```bash
 find ~/.claude/plugins/cache -path "*everywhere*/hooks/snapshot.py" 2>/dev/null | head -1
 ```
 
-If the search returns a path: that's `<ABS_PLUGIN_ROOT>` (the directory two levels above the matched file — i.e. drop the trailing `/hooks/snapshot.py`).
+If the search returns a path: that's `<ABS_PLUGIN_ROOT>` (drop the trailing `/hooks/snapshot.py`).
 Else: ask the user where they cloned the plugin and use that path.
 
-#### 3. Stage hooks to a TCC-safe location
+#### 4. Stage hooks to `~/.everywhere/hooks/`
 
-macOS Transparency, Consent, and Control (TCC) blocks `launchd`-spawned processes from reading paths inside `~/Documents/`, `~/Desktop/`, and `~/Downloads/` without explicit Full Disk Access. To avoid forcing the user through Privacy & Security settings, copy the Python scripts to `~/.everywhere/hooks/` (which is TCC-safe) and point the plist there.
+Codex hooks fire under the user (no TCC restrictions), but staging keeps the registered `command` strings in `~/.codex/hooks.json` pointed at a stable absolute path even in dev-mode installs.
 
 ```bash
 PLUGIN=<ABS_PLUGIN_ROOT>
 mkdir -p ~/.everywhere/hooks
-cp "$PLUGIN/hooks/snapshot.py" "$PLUGIN/hooks/codex_sweep.py" \
-   "$PLUGIN/hooks/summarizer.py" "$PLUGIN/hooks/__init__.py" \
+cp "$PLUGIN/hooks/snapshot.py" "$PLUGIN/hooks/codex_hook.py" \
+   "$PLUGIN/hooks/codex_sweep.py" "$PLUGIN/hooks/summarizer.py" \
+   "$PLUGIN/hooks/__init__.py" \
    ~/.everywhere/hooks/
 ```
 
-Re-running `/everywhere-codex-setup` after a plugin update refreshes these copies.
+Re-running `/everywhere-codex-setup` refreshes these copies (run after plugin updates).
 
-#### 4. Render the plist from the template
-
-Read `<ABS_PLUGIN_ROOT>/hooks/codex-sweeper.plist.template`. Replace `__ABS_PLUGIN_ROOT__` with `$HOME/.everywhere` (the staging path from step 3) and `__HOME__` with `$HOME`. Write the result to `~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist`.
+#### 5. Merge entries into `~/.codex/hooks.json`
 
 ```bash
-sed -e "s|__ABS_PLUGIN_ROOT__|$HOME/.everywhere|g" -e "s|__HOME__|$HOME|g" \
-    "$PLUGIN/hooks/codex-sweeper.plist.template" \
-    > ~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist
-plutil ~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist
+PYTHONPATH="$HOME/.everywhere" python3 -c "
+from pathlib import Path
+from hooks.codex_hook import install_hooks_json
+install_hooks_json(Path.home() / '.codex' / 'hooks.json',
+                   staged_dir=str(Path.home() / '.everywhere' / 'hooks'))
+print('ok')
+"
 ```
 
-The `plutil` line validates the XML. If it fails, abort and report the error.
-
-#### 5. Bootstrap the launchd job
+Verify:
 
 ```bash
-LABEL=dev.everywhere.codex-sweeper
-launchctl bootout gui/$UID/$LABEL 2>/dev/null || true
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/$LABEL.plist
-launchctl print gui/$UID/$LABEL | head -20
+python3 -c "import json; print(json.dumps(json.load(open('$HOME/.codex/hooks.json')), indent=2))" | head -40
 ```
 
-The `bootout` line is best-effort cleanup of any stale registration. `bootstrap` loads the plist. `print` should show the job is loaded.
+Expected: two entries under `"hooks"` (`Stop` and `SessionStart`), each command line pointing at `~/.everywhere/hooks/codex_hook.py`. Any pre-existing user-owned hook entries are preserved.
 
-#### 6. Kick once to verify
+#### 6. Smoke test
+
+Ask the user to open a Codex session and run at least one turn (then `/exit` or just leave it). After a turn fires, this file should appear:
 
 ```bash
-launchctl kickstart gui/$UID/dev.everywhere.codex-sweeper
-sleep 4
-tail -20 ~/agent-memory/.snapshots/codex-sweep.log 2>/dev/null
-tail -20 ~/agent-memory/.snapshots/codex-sweep.err 2>/dev/null
+ls -lt $HOME/agent-memory/.snapshots/.codex-cursor.json 2>/dev/null
 ```
 
-If `codex-sweep.err` shows `command not found: codex` or `command not found: claude`: the launchd `PATH` doesn't include the homebrew prefix. Check the plist's `<key>EnvironmentVariables</key>` block.
-
-If `codex-sweep.err` shows `Operation not permitted` reading the script path: step 3 was skipped — the launchd job is pointing at a TCC-protected location instead of `~/.everywhere/hooks/`. Re-run step 3 and step 4.
+If you want to see hook activity in real time, set `EVERYWHERE_DEBUG=1` in the shell where Codex runs.
 
 #### 7. Optionally install the Codex-side skill
 
@@ -256,31 +267,50 @@ This lets `/recall`, `/memory on`, etc. work from inside Codex too. Skip if the 
 
 Tell the user:
 - Staged hooks: `~/.everywhere/hooks/` (re-run setup after plugin updates)
-- Plist path: `~/Library/LaunchAgents/dev.everywhere.codex-sweeper.plist`
-- Sweep log: `~/agent-memory/.snapshots/codex-sweep.log`
-- Sweep interval: 5 min
-- Finality threshold: 10 min idle
+- Registered events: `Stop` (per-turn debounced snapshot) + `SessionStart` (finalize idle rollouts on next launch)
+- Hooks file: `~/.codex/hooks.json` (merged — your other hook entries preserved)
+- Finalization runs on the **next** Codex launch (Codex has no `SessionEnd` event); if you stop using Codex for a while, the last in-progress rollout won't push until you launch Codex again
+- Codex `notify` setting and `~/.codex/config.toml` were **not** modified
 - Codex skill: installed at `~/.codex/skills/everywhere/SKILL.md` (if step 7 ran)
-- Codex `notify` setting was **not** modified.
 
 ### `/everywhere-codex-uninstall`
 
-Stop the Codex sweeper, remove the launchd plist, and clean up the staged hooks.
+Removes Codex hook registrations and staged scripts. The memory repo and existing session files are untouched.
+
+#### 1. Remove hook entries from `~/.codex/hooks.json`
+
+```bash
+PYTHONPATH="$HOME/.everywhere" python3 -c "
+from pathlib import Path
+from hooks.codex_hook import uninstall_hooks_json
+uninstall_hooks_json(Path.home() / '.codex' / 'hooks.json')
+print('ok')
+"
+```
+
+Entries whose command does **not** reference `~/.everywhere/hooks/codex_hook.py` are preserved. Empty events are dropped; if `hooks.json` ends up empty, the file is deleted.
+
+#### 2. Best-effort launchd cleanup (for users upgrading from the old install)
 
 ```bash
 LABEL=dev.everywhere.codex-sweeper
-launchctl bootout gui/$UID/$LABEL 2>/dev/null
-rm -f ~/Library/LaunchAgents/$LABEL.plist
-rm -rf ~/.everywhere
+launchctl bootout "gui/$UID" "$HOME/Library/LaunchAgents/$LABEL.plist" 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
 ```
 
-Then optionally remove the Codex-side skill:
+#### 3. Remove staged scripts
+
+```bash
+rm -rf ~/.everywhere/hooks
+```
+
+#### 4. Optionally remove the Codex-side skill
 
 ```bash
 rm -rf ~/.codex/skills/everywhere
 ```
 
-The memory repo and existing session files are kept untouched. Tell the user that re-running `/everywhere-codex-setup` will resume sweeping with the existing cursor (no re-summarization of past sessions).
+Tell the user that re-running `/everywhere-codex-setup` will re-register and resume capture. The cursor in `~/agent-memory/.snapshots/.codex-cursor.json` is preserved across uninstall/reinstall (no re-summarization of past sessions).
 
 ### `/session-save`
 
@@ -318,10 +348,23 @@ sys.exit(1)
 PY
 ```
 
-If Codex case: shell out to the sweeper with the discovered path:
+If Codex case: kick the finalize sweep across all recent rollouts (it will
+finalize idle ones, including the current session if you've already exited
+the turn). For the current still-active session, this acts like an
+incremental snapshot — the next Codex `SessionStart` will finalize it.
 
 ```bash
-EVERYWHERE_DEBUG=1 python3 <ABS_PLUGIN_ROOT>/hooks/snapshot.py --codex-sweep
+PYTHONPATH="$HOME/.everywhere" EVERYWHERE_DEBUG=1 \
+  python3 "$HOME/.everywhere/hooks/codex_hook.py" finalize-sweep
+```
+
+If `~/.everywhere/hooks/` doesn't exist (the user hasn't run
+`/everywhere-codex-setup` yet), fall back to running directly from the
+plugin source:
+
+```bash
+PYTHONPATH=<ABS_PLUGIN_ROOT> EVERYWHERE_DEBUG=1 \
+  python3 <ABS_PLUGIN_ROOT>/hooks/codex_hook.py finalize-sweep
 ```
 
 Then verify the latest finalized session for this project:
