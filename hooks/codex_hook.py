@@ -130,6 +130,98 @@ def run_finalize_sweep() -> None:
         log(f"finalize-sweep complete: scanned={seen} acted={acted}")
 
 
+HOOK_MARKER = "/.everywhere/hooks/codex_hook.py"
+
+
+def _our_stop_entry(staged_dir: str) -> dict:
+    return {
+        "hooks": [
+            {
+                "type": "command",
+                "command": (
+                    f"nohup python3 -u {staged_dir}/codex_hook.py stop "
+                    f">/dev/null 2>&1 &"
+                ),
+                "timeout": 5,
+            }
+        ]
+    }
+
+
+def _our_sessionstart_entry(staged_dir: str) -> dict:
+    return {
+        "matcher": "startup|resume",
+        "hooks": [
+            {
+                "type": "command",
+                "command": (
+                    f"nohup python3 -u {staged_dir}/codex_hook.py finalize-sweep "
+                    f">/dev/null 2>&1 &"
+                ),
+                "timeout": 5,
+            }
+        ]
+    }
+
+
+def _entry_is_ours(entry: dict) -> bool:
+    for h in entry.get("hooks", []):
+        if HOOK_MARKER in h.get("command", ""):
+            return True
+    return False
+
+
+def install_hooks_json(hooks_path: Path, staged_dir: str) -> None:
+    """Merge our Stop and SessionStart entries into hooks_path. Idempotent."""
+    if hooks_path.exists():
+        try:
+            data = json.loads(hooks_path.read_text())
+        except json.JSONDecodeError:
+            data = {}
+    else:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("hooks", {})
+
+    for event, builder in (
+        ("Stop", _our_stop_entry),
+        ("SessionStart", _our_sessionstart_entry),
+    ):
+        existing = data["hooks"].get(event, [])
+        kept = [e for e in existing if not _entry_is_ours(e)]
+        kept.append(builder(staged_dir))
+        data["hooks"][event] = kept
+
+    hooks_path.parent.mkdir(parents=True, exist_ok=True)
+    hooks_path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def uninstall_hooks_json(hooks_path: Path) -> None:
+    """Remove our entries from hooks_path. Drop empty events; delete file if empty."""
+    if not hooks_path.exists():
+        return
+    try:
+        data = json.loads(hooks_path.read_text())
+    except json.JSONDecodeError:
+        return
+    if not isinstance(data, dict) or "hooks" not in data:
+        return
+
+    for event in list(data["hooks"].keys()):
+        kept = [e for e in data["hooks"][event] if not _entry_is_ours(e)]
+        if kept:
+            data["hooks"][event] = kept
+        else:
+            del data["hooks"][event]
+
+    if not data["hooks"]:
+        hooks_path.unlink()
+        return
+
+    hooks_path.write_text(json.dumps(data, indent=2) + "\n")
+
+
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
