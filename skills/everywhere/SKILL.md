@@ -348,10 +348,23 @@ sys.exit(1)
 PY
 ```
 
-If Codex case: shell out to the sweeper with the discovered path:
+If Codex case: kick the finalize sweep across all recent rollouts (it will
+finalize idle ones, including the current session if you've already exited
+the turn). For the current still-active session, this acts like an
+incremental snapshot — the next Codex `SessionStart` will finalize it.
 
 ```bash
-EVERYWHERE_DEBUG=1 python3 <ABS_PLUGIN_ROOT>/hooks/snapshot.py --codex-sweep
+PYTHONPATH="$HOME/.everywhere" EVERYWHERE_DEBUG=1 \
+  python3 "$HOME/.everywhere/hooks/codex_hook.py" finalize-sweep
+```
+
+If `~/.everywhere/hooks/` doesn't exist (the user hasn't run
+`/everywhere-codex-setup` yet), fall back to running directly from the
+plugin source:
+
+```bash
+PYTHONPATH=<ABS_PLUGIN_ROOT> EVERYWHERE_DEBUG=1 \
+  python3 <ABS_PLUGIN_ROOT>/hooks/codex_hook.py finalize-sweep
 ```
 
 Then verify the latest finalized session for this project:

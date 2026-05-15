@@ -143,3 +143,50 @@ def test_finalize_sweep_noop_when_no_sessions_dir(tmp_path, memory_repo, monkeyp
     monkeypatch.setattr(codex_hook, "CODEX_SESSIONS_ROOT", tmp_path / "does-not-exist")
     # Must not raise.
     codex_hook.run_finalize_sweep()
+
+
+def test_stop_never_calls_git_commit_push(tmp_path, memory_repo, monkeypatch):
+    """End-to-end: Stop path runs through real _handle_rollout but must never push."""
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_bytes(FIXTURE_ROLLOUT.read_bytes())
+    payload = {
+        "session_id": "test-session-no-push",
+        "transcript_path": str(rollout),
+        "cwd": "/tmp/proj",
+        "hook_event_name": "Stop",
+    }
+
+    monkeypatch.setattr(codex_hook, "MEMORY_REPO", memory_repo)
+    monkeypatch.setattr(codex_sweep, "summarize", lambda *a, **kw: _stub_summary_obj())
+    with patch.object(codex_sweep, "git_commit_push") as push_mock:
+        codex_hook.run_stop(payload)
+    assert push_mock.call_count == 0
+
+
+def test_stop_debounce_skips_second_call(tmp_path, memory_repo, monkeypatch):
+    """Two Stop invocations on the same session within DEBOUNCE_SECONDS:
+    the second is debounced (decide_action returns 'skip')."""
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_bytes(FIXTURE_ROLLOUT.read_bytes())
+    payload = {
+        "session_id": "debounce-test",
+        "transcript_path": str(rollout),
+        "cwd": "/tmp/proj",
+        "hook_event_name": "Stop",
+    }
+
+    monkeypatch.setattr(codex_hook, "MEMORY_REPO", memory_repo)
+    monkeypatch.setattr(codex_sweep, "summarize", lambda *a, **kw: _stub_summary_obj())
+    with patch.object(codex_sweep, "git_commit_push"):
+        codex_hook.run_stop(payload)
+        # Real session_id from fixture is what gets keyed in the cursor.
+        # Second call within debounce window should be a no-op write.
+        from hooks.codex_sweep import parse_codex_transcript
+        sid, _, _, _ = parse_codex_transcript(rollout)
+        cursor_path = memory_repo / ".snapshots" / ".codex-cursor.json"
+        first_state = json.loads(cursor_path.read_text())[sid]
+
+        codex_hook.run_stop(payload)
+        second_state = json.loads(cursor_path.read_text())[sid]
+    # Debounce: last_snapshot_at unchanged on the second call (decide_action returned "skip").
+    assert second_state["last_snapshot_at"] == first_state["last_snapshot_at"]

@@ -1,6 +1,11 @@
-"""Codex session sweeper — runs from launchd every 5 minutes.
+"""Shared rollout-handling library for the Codex hook capture path.
 
-See docs/specs/2026-05-06-codex-support-design.md for design.
+`_handle_rollout` decides whether a given rollout file should be skipped,
+incrementally snapshotted, or finalized, and writes the resulting session
+files. It is called by `codex_hook.py`'s `stop` (per-turn) and
+`finalize-sweep` (SessionStart) entry points.
+
+See docs/specs/2026-05-14-codex-hooks-migration-design.md for design.
 """
 from __future__ import annotations
 
