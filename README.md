@@ -26,13 +26,14 @@ transcripts, but they're raw and untagged, not browsable. Everywhere fixes that:
 
 ## How it works
 
-Two capture paths feed the same `~/agent-memory/`:
+Native hooks on both agents feed the same `~/agent-memory/`:
 
 | Trigger | Agent | When | Action |
 |---|---|---|---|
 | `Stop` hook | Claude Code | End of each turn | Debounced (10 min) snapshot. |
 | `SessionEnd` hook | Claude Code | `/exit` or session close | Final snapshot, commit, `pull --rebase` + push. |
-| `launchd` sweeper | Codex CLI | Every 5 min | Walks `~/.codex/sessions/`, snapshots active rollouts, finalizes idle ones (>10 min no activity). |
+| `Stop` hook | Codex CLI | End of each turn | Debounced (10 min) snapshot of the current rollout. |
+| `SessionStart` hook | Codex CLI | Codex launch (`startup` or `resume`) | Walk recent rollouts, finalize any idle >10 min, commit + push. |
 
 - **Claude** sessions are summarized by `claude -p` running Haiku 4.5.
 - **Codex** sessions are summarized by `codex exec --ephemeral` running a cheap
@@ -40,11 +41,17 @@ Two capture paths feed the same `~/agent-memory/`:
   summarizer call from itself producing a rollout.
 
 Sessions with fewer than 3 user messages are skipped on both paths. The Codex
-sweeper does **not** modify `~/.codex/config.toml` — it doesn't touch `notify`,
-so existing notify integrations (e.g., Computer Use) keep working.
+setup does **not** modify `~/.codex/config.toml` — it only touches
+`~/.codex/hooks.json` and preserves any pre-existing user-owned hook entries.
+Existing `notify` integrations (e.g., Computer Use) keep working.
+
+Note: Codex finalize runs at the **next** Codex launch, not at session exit
+(Codex CLI has no `SessionEnd` event as of 0.130.0). If you go a week without
+opening Codex, the in-progress rollout from your last session won't push
+until you launch Codex again.
 
 Every error path logs to stderr and exits 0; a misbehaving snapshot never
-blocks your session or the launchd timer.
+blocks your session.
 
 ## Install
 
@@ -63,14 +70,15 @@ Then in any Claude Code session:
 
 ```
 /everywhere-setup            # Claude side (memory repo + Stop/SessionEnd hooks)
-/everywhere-codex-setup      # Optional: Codex side (launchd sweeper, macOS only)
+/everywhere-codex-setup      # Optional: Codex side (Stop + SessionStart hooks; cross-platform)
 ```
 
 `/everywhere-setup` initializes `~/agent-memory/`, optionally creates a private
 GitHub repo for sync, and verifies hooks are registered.
 `/everywhere-codex-setup` stages the hook scripts to `~/.everywhere/hooks/`
-(avoiding macOS TCC restrictions on `~/Documents/`) and installs a launchd
-agent that polls Codex sessions every 5 min.
+(for stable absolute paths) and merges Codex `Stop` + `SessionStart` entries
+into `~/.codex/hooks.json`. Requires `codex-cli >= 0.130.0` (the `hooks`
+feature must be stable).
 
 ## Commands
 
@@ -79,8 +87,8 @@ Once installed, the plugin exposes:
 | Command | Purpose |
 |---|---|
 | `/everywhere-setup` | One-time setup. Initializes memory repo + Claude Code hooks. |
-| `/everywhere-codex-setup` | One-time setup for Codex CLI capture (macOS launchd sweeper). |
-| `/everywhere-codex-uninstall` | Remove the Codex sweeper and staged hooks. |
+| `/everywhere-codex-setup` | One-time setup for Codex CLI capture (registers `Stop` + `SessionStart` hooks). |
+| `/everywhere-codex-uninstall` | Remove the Codex hook entries and staged scripts. |
 | `/session-save` | Manually trigger a save of the current session (Claude or Codex auto-detected). |
 | `/recall <query>` | Search past sessions across all projects and agents, ranked. |
 | `/memory on` | Inject `INDEX.md` + the current project's `PROJECT.md` into context. |
@@ -120,34 +128,36 @@ push silently — everything still works locally.
   `python3 snapshot.py` which calls `claude -p` only for the summary step.
   `type: agent` was tried but is documented as experimental; the command path
   is deterministic and survives parent-process exit reliably.
-- **Codex trigger:** a launchd user agent (`StartInterval = 300`) instead of
-  Codex's `notify` config option. Reason: `notify` is a single-command field
-  and is commonly already in use (e.g., Codex Computer Use). The launchd path
-  is fully passive and never touches `~/.codex/config.toml`. Trade-off: up to
-  ~5 min capture latency, which is fine for "searchable memory" use cases.
-- **TCC staging:** macOS Transparency, Consent, and Control blocks
-  launchd-spawned processes from reading `~/Documents/` without Full Disk
-  Access. `/everywhere-codex-setup` works around this by copying the hook
-  scripts into `~/.everywhere/hooks/` and pointing the plist there.
-  Re-running setup refreshes the staged copies after a plugin update.
-- **Multi-machine:** `SessionEnd` (Claude) and the finalize-branch of the
-  Codex sweeper both do `git pull --rebase --autostash origin main` before
+- **Codex trigger:** Codex `Stop` and `SessionStart` hooks (stable since
+  codex-cli 0.130.0). `Stop` fires per turn for incremental snapshots;
+  `SessionStart` fires on `startup`/`resume` and runs the finalize sweep.
+  Both hook commands fork a detached process (`nohup ... &`) so they return
+  in milliseconds — Codex requires synchronous hook commands (the `async`
+  flag is silently skipped), and a sync wrapper around `nohup` is the
+  standard way to avoid blocking the TUI.
+- **Staging directory:** Scripts are copied to `~/.everywhere/hooks/` so the
+  registered hook commands in `~/.codex/hooks.json` have a stable absolute
+  path — handy for dev-mode installs from a cloned repo. The TCC workaround
+  that motivated this in the launchd era is no longer needed (Codex hooks
+  run under the user, not launchd). Re-running setup refreshes the staged
+  copies after a plugin update.
+- **Multi-machine:** `SessionEnd` (Claude) and the Codex `SessionStart`
+  finalize sweep both do `git pull --rebase --autostash origin main` before
   pushing. Concurrent edits from different machines reconcile automatically.
   True conflicts (rare, since each session writes its own dated folder) leave
   the local commit in place to be retried next session.
-- **Failure mode:** every error path logs to stderr and exits 0. The hook /
-  sweeper will *never* prevent you from `/exit`-ing or block another launchd
-  invocation.
+- **Failure mode:** every error path logs to stderr and exits 0. A hook will
+  *never* prevent you from `/exit`-ing.
 
 ## Configuration
 
 | Env var | Default | Effect |
 |---|---|---|
-| `EVERYWHERE_DEBUG` | `0` | When `1`, hook logs progress to stderr (visible in Claude Code's status line / Codex sweep log). |
-| `EVERYWHERE_CODEX_MODEL` | `gpt-5.4-mini` | Codex summarizer model. Set inline in the launchd plist's `EnvironmentVariables` block for persistence. |
+| `EVERYWHERE_DEBUG` | `0` | When `1`, hook logs progress to stderr (visible in the agent's status line). |
+| `EVERYWHERE_CODEX_MODEL` | `gpt-5.4-mini` | Codex summarizer model. Export from your shell rc; the Codex hook commands inherit the parent Codex process's environment. |
 
 Tunables live near the top of `hooks/snapshot.py` (Claude path) and
-`hooks/codex_sweep.py` (Codex sweeper):
+`hooks/codex_sweep.py` (shared rollout-handling library):
 
 - `DEBOUNCE_SECONDS = 600` — minimum gap between non-final snapshots.
 - `FINALITY_IDLE_SECONDS = 600` — Codex rollout idle threshold to trigger
@@ -156,7 +166,7 @@ Tunables live near the top of `hooks/snapshot.py` (Claude path) and
 - `MAX_CONVERSATION_CHARS = 60000` — transcript is tail-truncated to this size
   before being passed to the summarizer.
 - `DEFAULT_MODEL = "claude-haiku-4-5"` — Claude summarizer model.
-- `SCAN_DAYS = 7` — Codex sweeper only walks the last N days of rollouts.
+- `SCAN_DAYS = 7` — Codex `SessionStart` sweep only walks the last N days of rollouts.
 
 ## Repo
 
