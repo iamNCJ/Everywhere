@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -9,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from hooks import codex_sweep
-from hooks.codex_sweep import _handle_rollout, FINALITY_IDLE_SECONDS, DEBOUNCE_SECONDS
+from hooks.codex_sweep import _handle_rollout, FINALITY_IDLE_SECONDS
 
 
 FIXTURE_ROLLOUT = Path(__file__).parent / "fixtures" / "codex-rollout-normal.jsonl"
@@ -38,7 +39,6 @@ def test_handle_rollout_finalize_disabled_skips_idle(tmp_path, memory_repo, monk
     rollout = tmp_path / "rollout-test.jsonl"
     rollout.write_bytes(FIXTURE_ROLLOUT.read_bytes())
     very_old = time.time() - FINALITY_IDLE_SECONDS - 60
-    import os
     os.utime(rollout, (very_old, very_old))
 
     cursor = {}
