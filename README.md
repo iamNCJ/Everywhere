@@ -97,6 +97,26 @@ Once installed, the plugin exposes:
 | `/memory on` | Inject `INDEX.md` + the current project's `PROJECT.md` into context. |
 | `/memory off` | (Reminder) injected memory persists in the current session — start a new one to drop it. |
 
+### Dev-mode invocation (no command files)
+
+If you run Everywhere from a checked-out repo instead of the marketplace install
+(skill symlinked into `~/.claude/skills/everywhere`), the `commands/` directory
+isn't loaded, so the bare `/recall`, `/session-save`, etc. won't be recognized
+by Claude Code's slash parser. Invoke the skill directly instead:
+
+```
+/everywhere recall <query>
+/everywhere session-save
+/everywhere memory on
+/everywhere memory off
+/everywhere setup
+/everywhere codex-setup
+/everywhere codex-uninstall
+```
+
+The harness passes the trailing args to the `everywhere` skill, which routes
+to the matching section in `SKILL.md`. Equivalent to the bare commands.
+
 ## Repo layout
 
 After running `/everywhere-setup`, your `~/agent-memory/` looks like:
