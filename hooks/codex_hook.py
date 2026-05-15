@@ -91,12 +91,55 @@ def run_stop(payload: dict) -> None:
             err(f"stop handling failed: {e}")
 
 
+def run_finalize_sweep() -> None:
+    if not (MEMORY_REPO / ".git").exists():
+        err(f"memory repo not initialized at {MEMORY_REPO}; run /everywhere-setup")
+        return
+    if not CODEX_SESSIONS_ROOT.exists():
+        log(f"no Codex sessions directory at {CODEX_SESSIONS_ROOT}")
+        return
+
+    snapshots_dir = MEMORY_REPO / ".snapshots"
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = snapshots_dir / ".codex-sweep.lock"
+    cursor_path = snapshots_dir / ".codex-cursor.json"
+
+    with open(lock_path, "w") as lockf:
+        try:
+            fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log("another sweep already running; exiting")
+            return
+
+        cursor = load_cursor(cursor_path)
+        now = time.time()
+        seen = 0
+        acted = 0
+        for rollout in _iter_rollouts(CODEX_SESSIONS_ROOT, SCAN_DAYS):
+            seen += 1
+            try:
+                handled = _handle_rollout(
+                    rollout, cursor, now, MEMORY_REPO,
+                    allow_incremental=False, allow_finalize=True,
+                )
+                if handled:
+                    acted += 1
+                    save_cursor(cursor_path, cursor)
+            except Exception as e:
+                err(f"{rollout.name}: {e}")
+        log(f"finalize-sweep complete: scanned={seen} acted={acted}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("stop")
     sub.add_parser("finalize-sweep")
     args = parser.parse_args()
+
+    if args.cmd == "finalize-sweep":
+        run_finalize_sweep()
+        return
 
     if args.cmd == "stop":
         raw = sys.stdin.read()

@@ -107,3 +107,39 @@ def test_stop_no_op_when_payload_missing_fields(memory_repo, monkeypatch):
     monkeypatch.setattr(codex_hook, "MEMORY_REPO", memory_repo)
     # Should return without raising. Missing session_id.
     codex_hook.run_stop({"transcript_path": "/x", "cwd": "/y"})
+
+
+def test_finalize_sweep_calls_handle_with_finalize_only(tmp_path, memory_repo, monkeypatch):
+    """finalize-sweep iterates rollouts with allow_incremental=False, allow_finalize=True."""
+    fake_root = tmp_path / "codex" / "sessions"
+    date_dir = fake_root / "2026" / "05" / "14"
+    date_dir.mkdir(parents=True)
+    rollout = date_dir / "rollout-aaa.jsonl"
+    rollout.write_bytes(FIXTURE_ROLLOUT.read_bytes())
+
+    monkeypatch.setattr(codex_hook, "MEMORY_REPO", memory_repo)
+    monkeypatch.setattr(codex_hook, "CODEX_SESSIONS_ROOT", fake_root)
+
+    calls = []
+
+    def fake_handle(rollout_arg, cursor, now, memory_repo_arg, *,
+                    allow_incremental, allow_finalize):
+        calls.append({"rollout": rollout_arg,
+                      "allow_incremental": allow_incremental,
+                      "allow_finalize": allow_finalize})
+        return False
+
+    monkeypatch.setattr(codex_hook, "_handle_rollout", fake_handle)
+
+    codex_hook.run_finalize_sweep()
+
+    assert len(calls) == 1
+    assert calls[0]["allow_incremental"] is False
+    assert calls[0]["allow_finalize"] is True
+
+
+def test_finalize_sweep_noop_when_no_sessions_dir(tmp_path, memory_repo, monkeypatch):
+    monkeypatch.setattr(codex_hook, "MEMORY_REPO", memory_repo)
+    monkeypatch.setattr(codex_hook, "CODEX_SESSIONS_ROOT", tmp_path / "does-not-exist")
+    # Must not raise.
+    codex_hook.run_finalize_sweep()
