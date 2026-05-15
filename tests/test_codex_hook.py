@@ -66,3 +66,45 @@ def test_handle_rollout_incremental_disabled_skips_active(tmp_path, memory_repo)
             allow_incremental=False, allow_finalize=True,
         )
     assert handled is False
+
+
+import subprocess
+from hooks import codex_hook
+
+
+def test_stop_reads_payload_and_calls_handle_rollout(tmp_path, memory_repo, monkeypatch):
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_bytes(FIXTURE_ROLLOUT.read_bytes())
+
+    payload = {
+        "session_id": "test-session-abc",
+        "transcript_path": str(rollout),
+        "cwd": "/tmp/proj",
+        "hook_event_name": "Stop",
+    }
+
+    monkeypatch.setattr(codex_hook, "MEMORY_REPO", memory_repo)
+    captured = {}
+
+    def fake_handle(rollout_arg, cursor, now, memory_repo_arg, *,
+                    allow_incremental, allow_finalize):
+        captured["allow_incremental"] = allow_incremental
+        captured["allow_finalize"] = allow_finalize
+        captured["rollout"] = rollout_arg
+        return True
+
+    monkeypatch.setattr(codex_hook, "_handle_rollout", fake_handle)
+    monkeypatch.setattr(codex_hook, "save_cursor", lambda *a, **kw: None)
+    monkeypatch.setattr(codex_hook, "load_cursor", lambda *a, **kw: {})
+
+    codex_hook.run_stop(payload)
+
+    assert captured["allow_incremental"] is True
+    assert captured["allow_finalize"] is False
+    assert captured["rollout"] == rollout
+
+
+def test_stop_no_op_when_payload_missing_fields(memory_repo, monkeypatch):
+    monkeypatch.setattr(codex_hook, "MEMORY_REPO", memory_repo)
+    # Should return without raising. Missing session_id.
+    codex_hook.run_stop({"transcript_path": "/x", "cwd": "/y"})
