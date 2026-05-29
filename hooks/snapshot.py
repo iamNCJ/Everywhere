@@ -490,9 +490,14 @@ def main():
     update_index_md(project_name, cwd)
     log(f"wrote {session_dir}")
 
+    # Push on every snapshot (Stop *and* SessionEnd), not just session end.
+    # In an ephemeral pod that can be hard-killed (k8s BackoffLimitExceeded,
+    # node drain, OOM), SessionEnd frequently never fires — deferring the push
+    # to it loses the whole session. async:true keeps this off the user's
+    # critical path so it never blocks the next prompt.
+    headline = first_sentence(summary_obj["summary"])
+    git_commit_push(project_name, session_short, headline)
     if is_final:
-        headline = first_sentence(summary_obj["summary"])
-        git_commit_push(project_name, session_short, headline)
         debounce_file.unlink(missing_ok=True)
     else:
         try:
