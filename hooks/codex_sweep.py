@@ -27,6 +27,7 @@ from hooks.snapshot import (
     git_commit_push,
     first_sentence,
     project_slug,
+    session_short_id,
 )
 from hooks.summarizer import summarize, DEFAULT_CODEX_MODEL
 
@@ -172,7 +173,7 @@ def _handle_rollout(
 
     project_name = project_slug(cwd)
     date_str = (started_at or datetime.now(timezone.utc).isoformat())[:10]
-    session_short = session_id[:6]
+    session_short = session_short_id(session_id)
     session_dir = (
         memory_repo / "projects" / project_name / "sessions" / f"{date_str}-{session_short}"
     )

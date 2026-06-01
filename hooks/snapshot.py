@@ -61,6 +61,17 @@ def project_slug(cwd: str) -> str:
     return f"{basename}-{h}"
 
 
+def session_short_id(session_id: str) -> str:
+    """Collision-resistant short id used in session directory names.
+
+    Codex session ids are UUIDv7-like and often share the first 6-8
+    characters when created close together. Strip separators and keep 12
+    alphanumeric chars so paths stay compact without overwriting sessions.
+    """
+    compact = re.sub(r"[^A-Za-z0-9]", "", session_id or "")
+    return (compact or "unknown")[:12]
+
+
 # ---------- transcript parsing ----------
 
 def parse_transcript(path: Path):
@@ -419,7 +430,7 @@ def main():
 
     project_name = project_slug(cwd)
     date_str = (started_at or datetime.now(timezone.utc).isoformat())[:10]
-    session_short = session_id[:6]
+    session_short = session_short_id(session_id)
     session_dir = (
         MEMORY_REPO / "projects" / project_name / "sessions" / f"{date_str}-{session_short}"
     )

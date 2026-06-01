@@ -398,7 +398,7 @@ Read the first lines of the JSONL file to find a line with a `cwd` field:
 - `project_name` = `{basename}-{hash8}` where `basename` is `basename(project_path)` and `hash8` is the first 8 hex chars of `sha256(abspath(project_path))` — disambiguates folders sharing a basename
 - `session_id` = stem of the JSONL filename (filename without `.jsonl`)
 - `started_at` = ISO 8601 timestamp from the first JSONL entry that has a `timestamp` field
-- `session_id_short` = first 6 characters of `session_id`
+- `session_id_short` = first 12 alphanumeric characters of `session_id` after removing separators (prevents Codex UUIDv7 prefix collisions)
 - `date_str` = first 10 characters of `started_at` (e.g. `2026-04-29`)
 
 #### 3. Parse the conversation

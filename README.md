@@ -130,7 +130,7 @@ After running `/everywhere-setup`, your `~/agent-memory/` looks like:
 │   └── <project-name>/
 │       ├── PROJECT.md                        # recent sessions for this project
 │       └── sessions/
-│           └── 2026-05-06-abc123/
+│           └── 2026-05-06-abc123def456/
 │               ├── meta.yaml                 # session_id, tags, started_at, ...
 │               ├── summary.md                # 3–5 sentence headline
 │               ├── decisions.md              # technical decisions + rationale

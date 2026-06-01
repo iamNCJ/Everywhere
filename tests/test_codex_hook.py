@@ -11,6 +11,7 @@ import pytest
 
 from hooks import codex_sweep
 from hooks.codex_sweep import _handle_rollout, FINALITY_IDLE_SECONDS
+from hooks.snapshot import project_slug
 
 
 FIXTURE_ROLLOUT = Path(__file__).parent / "fixtures" / "codex-rollout-normal.jsonl"
@@ -24,6 +25,14 @@ def _stub_summary_obj():
         "excerpts": "e",
         "tags": ["t"],
     }
+
+
+def _rollout_with_session_id(tmp_path: Path, session_id: str) -> Path:
+    rollout = tmp_path / f"rollout-{session_id}.jsonl"
+    text = FIXTURE_ROLLOUT.read_text()
+    text = text.replace("019de111-1111-2222-3333-444444444444", session_id)
+    rollout.write_text(text)
+    return rollout
 
 
 @pytest.fixture
@@ -66,6 +75,34 @@ def test_handle_rollout_incremental_disabled_skips_active(tmp_path, memory_repo)
             allow_incremental=False, allow_finalize=True,
         )
     assert handled is False
+
+
+def test_handle_rollout_uses_collision_resistant_session_short(tmp_path, memory_repo):
+    """Codex UUIDv7 session ids commonly share the first 6-8 chars.
+
+    Regression: using session_id[:6] made multiple sessions from the same
+    project/date overwrite the same memory directory.
+    """
+    sid_a = "019e777a-1111-7000-8000-aaaaaaaaaaaa"
+    sid_b = "019e777a-2222-7000-8000-bbbbbbbbbbbb"
+    rollout_a = _rollout_with_session_id(tmp_path, sid_a)
+    rollout_b = _rollout_with_session_id(tmp_path, sid_b)
+
+    cursor = {}
+    with patch.object(codex_sweep, "summarize", return_value=_stub_summary_obj()):
+        assert _handle_rollout(
+            rollout_a, cursor, now=time.time(), memory_repo=memory_repo,
+            allow_incremental=True, allow_finalize=False,
+        )
+        assert _handle_rollout(
+            rollout_b, cursor, now=time.time(), memory_repo=memory_repo,
+            allow_incremental=True, allow_finalize=False,
+        )
+
+    project_name = project_slug("/Users/test/proj")
+    sessions_dir = memory_repo / "projects" / project_name / "sessions"
+    assert (sessions_dir / "2026-05-06-019e777a1111").is_dir()
+    assert (sessions_dir / "2026-05-06-019e777a2222").is_dir()
 
 
 from hooks import codex_hook
@@ -119,6 +156,7 @@ def test_finalize_sweep_calls_handle_with_finalize_only(tmp_path, memory_repo, m
 
     monkeypatch.setattr(codex_hook, "MEMORY_REPO", memory_repo)
     monkeypatch.setattr(codex_hook, "CODEX_SESSIONS_ROOT", fake_root)
+    monkeypatch.setattr(codex_hook, "_iter_rollouts", lambda root, days: iter([rollout]))
 
     calls = []
 
